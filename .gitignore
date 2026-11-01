@@ -1,0 +1,38 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+
+# Build output (PyInstaller)
+build/
+dist/
+*.spec
+
+# Project files and generated outputs
+*.bimx
+*.bimx.autosave
+*.bimx.tmp
+*.ifc
+*.xlsx
+*.csv
+*.svg
+
+# Sample folder: only the generated demo plans are tracked.
+# Client drawings (DWG/DXF/PDF) must never be committed.
+samples/*
+!samples/two_rooms.dxf
+!samples/two_rooms.pdf
+
+# Editors and OS
+.vscode/
+.idea/
+*.log
+build_log.txt
+Thumbs.db
+.DS_Store

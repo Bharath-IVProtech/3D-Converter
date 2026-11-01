@@ -1,0 +1,16 @@
+BIMForge bundles the following third-party components as separate, replaceable libraries.
+
+LGPL-licensed (dynamically linked; you may replace these files with modified versions):
+  - Qt 6 / PySide6 ........ LGPL-3.0   https://www.qt.io/  (source: https://code.qt.io/)
+  - IfcOpenShell .......... LGPL-3.0   https://ifcopenshell.org/  (source: https://github.com/IfcOpenShell/IfcOpenShell)
+  - GEOS (via Shapely) .... LGPL-2.1   https://libgeos.org/  (source: https://github.com/libgeos/geos)
+  Copies of the corresponding source code are available from the URLs above, or on written request.
+
+Permissive licenses:
+  - VTK ................... BSD-3-Clause
+  - NumPy ................. BSD-3-Clause
+  - Shapely ............... BSD-3-Clause
+  - ezdxf ................. MIT
+  - Python ................ PSF License
+
+Full license texts are included in the respective package folders inside _internal\.
