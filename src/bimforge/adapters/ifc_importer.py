@@ -123,23 +123,31 @@ class _Reader:
 
         products = [p for p in self.f.by_type("IfcProduct") if not any(p.is_a(c) for c in SKIP_CLASSES)]
         fillers = [p for p in products if p.is_a("IfcDoor") or p.is_a("IfcWindow")]
+        filler_ids = {p.id() for p in fillers}
+        wall_products = {}
         for product in products:
-            if product in fillers or product.id() not in meshes:
+            if product.id() in filler_ids or product.id() not in meshes:
                 continue
             mesh = meshes[product.id()]
             if product.is_a("IfcWall"):
                 element = self._wall(product, mesh)
+                if element is not None:
+                    wall_products[product.id()] = product
             elif product.is_a("IfcSlab"):
                 element = self._slabs(product, mesh)
             else:
                 element = None
             if element is None:
                 self._add(self._imported(product, mesh))
+        filler_of: dict[str, Any] = {}  # opening element id -> IFC filler
         for product in fillers:
             if product.id() in meshes:
                 element = self._filler(product, meshes[product.id()])
                 if element is None:
                     self._add(self._imported(product, meshes[product.id()]))
+                else:
+                    filler_of[element.id] = product
+        self._revert_unfilled_walls(wall_products, filler_of, meshes)
         for space in self.f.by_type("IfcSpace"):
             self._space(space)
 
@@ -150,6 +158,27 @@ class _Reader:
 
     def _add(self, element: Element) -> None:
         self.project.add(element)
+
+    def _revert_unfilled_walls(self, wall_products: dict[int, Any], filler_of: dict[str, Any],
+                               meshes: dict[int, MeshData]) -> None:
+        """A parametric wall is a solid box: keep it only if every IFC void in it became an Opening.
+
+        Otherwise (empty voids, or fillers that did not fit) the exact mesh is kept, so holes are not lost.
+        """
+        for ifc_id, product in wall_products.items():
+            wall = self.walls[ifc_id]
+            voids = len(getattr(product, "HasOpenings", ()) or ())
+            hosted = self.project.hosted_openings(wall.id)
+            if voids <= len(hosted):
+                continue
+            for opening in hosted:
+                self.project.remove(opening.id)
+                filler = filler_of.get(opening.id)
+                if filler is not None and filler.id() in meshes:
+                    self._add(self._imported(filler, meshes[filler.id()]))
+            self.project.remove(wall.id)
+            del self.walls[ifc_id]
+            self._add(self._imported(product, meshes[ifc_id]))
 
     # --- spatial structure -------------------------------------------------------
 

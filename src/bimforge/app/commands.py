@@ -439,8 +439,10 @@ class MergeProject(Command):
             storey_map: dict[str, str] = {}
             commands: list[Command] = []
             for storey in self.source.storeys:
+                # Match existing levels and levels this import already adds (two source levels at one height).
+                candidates = list(project.storeys) + [c.storey for c in commands if isinstance(c, AddStorey)]
                 match = next(
-                    (s for s in project.storeys if abs(s.elevation - storey.elevation) <= self.LEVEL_MATCH), None
+                    (s for s in candidates if abs(s.elevation - storey.elevation) <= self.LEVEL_MATCH), None
                 )
                 if match is None:
                     match = storey if project.storey(storey.id) is None else dataclasses.replace(storey, id=new_id())

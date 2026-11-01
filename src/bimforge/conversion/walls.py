@@ -105,7 +105,8 @@ def pair_wall_faces(
             jj = int(j[k])
             b = segs[jj]
             angle_deg = math.degrees(math.acos(min(1.0, float(cos_angle[k]))))
-            parallel = 1 - angle_deg / settings.parallel_tolerance_deg
+            tolerance = settings.parallel_tolerance_deg
+            parallel = 1 - angle_deg / tolerance if tolerance > 0 else 1.0
             coverage = float(t1[k] - t0[k]) / min(lengths[i], lengths[jj])
             score = min(scores[i], scores[jj]) * (0.5 + 0.25 * parallel + 0.25 * min(1.0, coverage))
             lo, hi = float(t0[k]), float(t1[k])

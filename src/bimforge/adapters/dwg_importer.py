@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -38,7 +39,12 @@ def find_oda_converter() -> str | None:
     for linux in ("/usr/bin/ODAFileConverter", "/Applications/ODAFileConverter.app/Contents/MacOS/ODAFileConverter"):
         if Path(linux).is_file():
             candidates.append(linux)
-    return sorted(candidates)[-1] if candidates else None  # newest version folder sorts last
+    # Newest version folder last; compare version numbers numerically ("25.12" is newer than "25.9").
+    return max(candidates, key=_version_key) if candidates else None
+
+
+def _version_key(path: str) -> tuple:
+    return tuple(int(n) for n in re.findall(r"\d+", Path(path).parent.name)), path
 
 
 def find_libredwg() -> str | None:

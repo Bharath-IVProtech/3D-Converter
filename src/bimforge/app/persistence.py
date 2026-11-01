@@ -188,7 +188,10 @@ def load_project(path: Path) -> LoadResult:
             result.warnings.append(f"Element {element_id} ({class_name}) could not be loaded: {exc}")
     # Hosts first, so openings always find their wall.
     for element in sorted(elements, key=lambda e: isinstance(e, Opening)):
-        project.add(element)
+        try:
+            project.add(element)
+        except ValueError as exc:  # e.g. unknown storey or duplicate id: skip the element, keep the file
+            result.warnings.append(f"Element {element.id} ({type(element).__name__}) could not be loaded: {exc}")
     for class_name, count in skipped.items():
         result.warnings.append(f"{count} '{class_name}' elements skipped (plugin not installed?)")
     return result

@@ -144,8 +144,9 @@ class PlanConverter:
         segments = [x for x in segments if _key(x) not in treads]
         layer_scores = self._layer_scores(drawing)
         blocks = [b for b in drawing.of_type(BlockRef) if drawing.is_visible(b)]
+        sizes = self._block_sizes(drawing, k)
         filled = [x for x in drawing.of_type(Polyline) if x.filled and drawing.is_visible(x)
-                  and self._block_allowed(x.block, self._block_sizes(drawing, k))]
+                  and self._block_allowed(x.block, sizes)]
         filled_walls, columns = filled_elements(filled, k, s)
 
         walls = pair_wall_faces(segments, s, layer_scores) + wide + filled_walls
@@ -296,12 +297,7 @@ class PlanConverter:
     ) -> tuple[list, list[WallCandidate]]:
         """Face segments to pair, plus walls drawn directly as wide polylines."""
         s = self.settings
-        sizes: dict[str, float] = {}
-        for ref in drawing.of_type(BlockRef):
-            if ref.extent is not None:
-                (x0, y0), (x1, y1) = ref.extent
-                size = max(abs((x1 - x0) * ref.scale[0]), abs((y1 - y0) * ref.scale[1])) * k
-                sizes[ref.name] = max(sizes.get(ref.name, 0.0), size)
+        sizes = self._block_sizes(drawing, k)
         segments = []
         wide: list[WallCandidate] = []
         for primitive in drawing.primitives:
@@ -380,6 +376,10 @@ class PlanConverter:
                 el: Opening = Door(host_id=wall.id, offset=offset, width=width, height=min(s.door_height, wall.height))
             else:
                 height = min(s.window_height, wall.height - s.window_sill_height)
+                if height <= 0:
+                    warnings.append(f"Window {c.handle} does not fit below the wall height (sill "
+                                    f"{s.window_sill_height:g} m); skipped")
+                    continue
                 el = Window(host_id=wall.id, offset=offset, width=width, height=height, sill_height=s.window_sill_height)
             el.storey_id = storey.id
             if any(self._overlaps(el, p.element) for p in out):

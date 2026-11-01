@@ -102,8 +102,16 @@ def evaluate(project: Project, circuit: DistributionSystem) -> CircuitRow:
     load = sum(fixture_value(f, "load_va") for f in fixtures)
     ib = load / VOLTAGE
     notes = []
-    breaker = float(circuit.properties.get("breaker_a") or breaker_for(max(ib, 0.1)))
-    cable = float(circuit.properties.get("cable_mm2") or cable_for(breaker))
+    try:
+        breaker = float(circuit.properties.get("breaker_a") or breaker_for(max(ib, 0.1)))
+    except ValueError as exc:  # load beyond the tabulated range: report it instead of failing the whole check
+        notes.append(str(exc))
+        breaker = float(BREAKER_RATINGS[-1])
+    try:
+        cable = float(circuit.properties.get("cable_mm2") or cable_for(breaker))
+    except ValueError as exc:
+        notes.append(str(exc))
+        cable = CABLES[-1][0]
     length = float(circuit.properties.get("length_m") or estimated_length(project, circuit))
     vd = _mv_per_am(cable) * ib * length / 1000 / VOLTAGE if cable in [c[0] for c in CABLES] else 0.0
     iz = next((i for size, i, _ in CABLES if size == cable), 0.0)

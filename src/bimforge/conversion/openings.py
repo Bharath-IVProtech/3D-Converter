@@ -85,7 +85,7 @@ def place_openings(
     unplaced: list[OpeningSymbol] = []
 
     for symbol in symbols:
-        best: tuple[float, int, int, Point2, Point2] | None = None
+        best: tuple[float, float, int, int, Point2, Point2] | None = None
         # Only walls that could border a gap next to this symbol are worth pairing.
         starts = np.array([w.start for w in walls], dtype=np.float64).reshape(-1, 2)
         ends = np.array([w.end for w in walls], dtype=np.float64).reshape(-1, 2)
@@ -102,10 +102,12 @@ def place_openings(
                 if hit is None or not MIN_OPENING_GAP <= hit[0] <= settings.max_opening_gap:
                     continue
                 dist = _anchor_distance(symbol, hit[1], hit[2])
-                if dist <= walls[i].thickness / 2 + SYMBOL_REACH and (best is None or dist < best[0]):
-                    best = (dist, i, j, hit[1], hit[2])
+                # Ties (anchor inside several nested gaps) go to the narrowest gap, i.e. adjacent walls,
+                # so a wider gap never swallows a wall piece lying between its two walls.
+                if dist <= walls[i].thickness / 2 + SYMBOL_REACH and (best is None or (dist, hit[0]) < best[:2]):
+                    best = (dist, hit[0], i, j, hit[1], hit[2])
         if best is not None:
-            _, i, j, g0, g1 = best
+            _, _, i, j, g0, g1 = best
             walls[i] = merge_pair(walls[i], walls[j])
             del walls[j]
             centre = ((g0[0] + g1[0]) / 2, (g0[1] + g1[1]) / 2)
@@ -327,4 +329,4 @@ def _arc_from_points(pts: list[Point2]) -> list[Arc]:
     angles = np.unwrap([math.atan2(p[1] - cy, p[0] - cx) for p in pts])
     a0, a1 = math.degrees(angles[0]), math.degrees(angles[-1])
     lo, hi = min(a0, a1), max(a0, a1)
-    return [Arc(center=(cx, cy), radius=r, start_angle=lo % 360, end_angle=(lo + (hi - lo)) % 360)]
+    return [Arc(center=(cx, cy), radius=r, start_angle=lo % 360, end_angle=hi % 360)]

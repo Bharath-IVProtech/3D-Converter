@@ -227,4 +227,8 @@ class DxfImporter(Importer):
             return None
         if not box.has_data:
             return None
-        return (_xy(box.extmin), _xy(box.extmax))
+        # INSERT maps (local - base_point) to the insertion point, so the extent must be relative to it
+        # for BlockRef.to_world / world_center to land on the symbol.
+        bx, by = _xy(block.block.dxf.get("base_point", (0.0, 0.0, 0.0)))
+        (x0, y0), (x1, y1) = _xy(box.extmin), _xy(box.extmax)
+        return ((x0 - bx, y0 - by), (x1 - bx, y1 - by))
