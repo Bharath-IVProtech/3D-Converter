@@ -10,6 +10,8 @@ What works today:
 - **Electrical:** sockets, lights, switches, boards, circuits, conduit and cable tray, panel schedules, single-line diagram (SVG).
 - **Coordination:** clash detection (hard and clearance) with issue tracking, model checks, quantity takeoff to Excel/CSV, section box, measure.
 
+**New here?** Read [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md), a plain-language, step-by-step guide to how BIMForge is designed and how it turns a drawing into a 3D model.
+
 See [docs/DESIGN.md](docs/DESIGN.md) for the architecture, data model, pipelines, roadmap and risks.
 
 ## Setup (Windows)
