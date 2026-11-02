@@ -140,19 +140,35 @@ class Space(Element):
 
 @dataclass(kw_only=True)
 class Stair(Element):
-    """Straight stair flight. Climbs from `start` to `end` (centres of the flight's ends, in plan)."""
+    """One staircase: a flight from `start` to `end`, plus any further flights joined by landings.
+
+    It climbs in order: first flight, landing, next flight... `height` is the total rise of all
+    flights. Each further flight is (start x, start y, end x, end y, width, risers).
+    """
 
     start: Point2
     end: Point2
     width: float = 1.0
-    risers: int = 16
+    risers: int = 16  # of the first flight
     height: float = 3.0  # total rise
     base_offset: float = 0.0
+    further_flights: list[tuple[float, float, float, float, float, int]] = field(default_factory=list)
 
     ifc_class: ClassVar[str] = "IfcStair"
 
     @property
+    def flights(self) -> list[tuple[Point2, Point2, float, int]]:
+        """Every flight in climbing order: (start, end, width, risers)."""
+        rest = [((x0, y0), (x1, y1), w, int(r)) for x0, y0, x1, y1, w, r in self.further_flights]
+        return [(self.start, self.end, self.width, self.risers), *rest]
+
+    @property
+    def total_risers(self) -> int:
+        return sum(flight[3] for flight in self.flights)
+
+    @property
     def length(self) -> float:
+        """Length of the first flight."""
         return math.dist(self.start, self.end)
 
     @property
@@ -161,7 +177,7 @@ class Stair(Element):
 
     @property
     def riser_height(self) -> float:
-        return self.height / self.risers
+        return self.height / self.total_risers
 
 
 @dataclass(kw_only=True)
@@ -254,6 +270,7 @@ class DuctSegment(MepSegment):
 
     width: float = 0.3
     depth: float = 0.3
+    end_width: float | None = None  # set on a transition: the width at the end of the path
     ifc_class: ClassVar[str] = "IfcDuctSegment"
     discipline: ClassVar[Discipline] = Discipline.MECHANICAL
 

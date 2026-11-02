@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from enum import Enum
+from functools import lru_cache
 
 
 class LayerRole(str, Enum):
@@ -40,6 +41,7 @@ WALL_LAYER_SCORE = {
 }
 
 
+@lru_cache(maxsize=4096)  # called for every line in a drawing, with few distinct names
 def classify_name(name: str) -> LayerRole:
     for role, pattern in _RULES:
         if pattern.search(name):

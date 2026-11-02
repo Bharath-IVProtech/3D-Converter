@@ -8,10 +8,17 @@ from bimforge.app.commands import CommandBus, commit_conversion
 from bimforge.app.events import EventBus
 from bimforge.app.persistence import load_project, save_project
 from bimforge.conversion import ConversionSettings, PlanConverter
-from bimforge.conversion.ducts import detect_ducts, parse_labels
+from bimforge.conversion.ducts import (
+    DuctCandidate,
+    detect_ducts,
+    duct_wall_holes,
+    find_louvres,
+    parse_labels,
+    parse_louvre_sizes,
+)
 from bimforge.coordination.clash import DEFAULT_TESTS, ClashDetector
 from bimforge.coordination.quantities import take_off
-from bimforge.core.model import DuctSegment, Project, Slab, SystemType, Wall
+from bimforge.core.model import DuctSegment, Opening, Project, Slab, SystemType, Wall
 from bimforge.core.units import LengthUnit
 from bimforge.drawing.primitives import Drawing2D, Layer, Segment, Text
 from bimforge.geometry.builders import Tessellator
@@ -208,3 +215,87 @@ def test_duct_through_a_slab_is_a_clash():
     test = next(t for t in DEFAULT_TESTS if t.name == "Mechanical vs Structure")
     (clash,) = ClashDetector(p, Tessellator(NumpyKernel())).run(test)
     assert clash.kind == "hard"
+
+
+class TestTransitions:
+    def test_reducer_between_two_widths_is_tapered(self):
+        lines = [seg(0, 0, 4, 0), seg(0, 0.8, 4, 0.8), seg(5, 0.2, 9, 0.2), seg(5, 0.6, 9, 0.6)]
+        labels = parse_labels(words(1, 2, "800x300", "EA") + words(6, 2, "400x300", "EA"), 1.0)
+        ducts = detect_ducts(lines, labels, S)
+        (taper,) = [d for d in ducts if d.end_width]
+        assert {taper.width, taper.end_width} == {0.8, 0.4}
+        assert math.dist(taper.start, taper.end) == pytest.approx(1.0)
+
+    def test_side_by_side_ducts_are_not_connected(self):
+        lines = [seg(0, 0, 4, 0), seg(0, 0.8, 4, 0.8), seg(0, 1.5, 4, 1.5), seg(0, 1.9, 4, 1.9)]
+        labels = parse_labels(words(1, 3, "800x300", "EA") + words(1, 4, "400x300", "EA"), 1.0)
+        assert not [d for d in detect_ducts(lines, labels, S) if d.end_width]
+
+    def test_tapered_geometry_volume(self):
+        p = Project()
+        duct = DuctSegment(width=0.8, end_width=0.4, depth=0.3, path=[(0, 0, 4), (2, 0, 4)])
+        p.add(duct)
+        mesh = Tessellator(NumpyKernel()).mesh_for(duct, p)
+        assert mesh.volume() == pytest.approx((0.8 + 0.4) / 2 * 0.3 * 2)
+
+
+class TestWallHoles:
+    @staticmethod
+    def wall():
+        return Wall(start=(0, 0), end=(10, 0), thickness=0.3, height=5)
+
+    @staticmethod
+    def duct(**changes):
+        base = dict(start=(5, -3), end=(5, 3), width=0.45, depth=0.3, bottom=4.0, kind="EA", confidence=0.85,
+                    labelled=True)
+        return DuctCandidate(**{**base, **changes})
+
+    def test_duct_through_a_wall_makes_a_hole_with_clearance(self):
+        (hole,) = duct_wall_holes([self.duct()], [self.wall()])
+        assert hole.offset == pytest.approx(5) and hole.width == pytest.approx(0.52)
+        assert hole.height == pytest.approx(0.37) and hole.sill == pytest.approx(3.965)
+
+    def test_duct_stopping_at_a_wall_counts(self):
+        assert duct_wall_holes([self.duct(start=(5, 0.3), end=(5, 4))], [self.wall()])
+
+    def test_far_duct_above_or_along_the_wall_makes_none(self):
+        wall = self.wall()
+        assert not duct_wall_holes([self.duct(start=(5, 2), end=(5, 6))], [wall])
+        assert not duct_wall_holes([self.duct(bottom=4.8)], [wall])
+        assert not duct_wall_holes([self.duct(start=(1, 0), end=(9, 0))], [wall])
+
+    def test_louvre_found_from_its_schedule_size(self):
+        sizes = parse_louvre_sizes([Text(position=(0, 0), text="1X2200X500H.", height=0.1),
+                                    Text(position=(0, 1), text="1400X1200X600H.", height=0.1)])  # a plenum, not a louvre
+        assert sizes == [(2.2, 0.5)]
+        lines = [seg(3, 0.05, 5.2, 0.05), seg(3, -0.05, 5.2, -0.05)]  # one louvre drawn with two lines
+        (hole,) = find_louvres(lines, {"cyan"}, sizes, [self.wall()], 4.0)
+        assert (hole.kind, hole.width, hole.height, hole.sill) == ("Louvre", 2.2, 0.5, 4.0)
+        assert hole.offset == pytest.approx(4.1)
+
+    def test_wrong_colour_or_length_is_not_a_louvre(self):
+        wall = self.wall()
+        assert not find_louvres([seg(3, 0, 5.2, 0, "0.50 pt grey 54%")], {"cyan"}, [(2.2, 0.5)], [wall], 4.0)
+        assert not find_louvres([seg(3, 0, 4, 0)], {"cyan"}, [(2.2, 0.5)], [wall], 4.0)
+
+    def test_pipeline_cuts_the_wall_and_rejecting_the_wall_drops_the_hole(self):
+        prims = []
+        for x0, y0, x1, y1 in ((0, 0, 10, 0), (0, 0.3, 10, 0.3), (0, 8, 10, 8), (0, 7.7, 10, 7.7),
+                               (0, 0, 0, 8), (0.3, 0.3, 0.3, 7.7), (10, 0, 10, 8), (9.7, 0.3, 9.7, 7.7)):
+            prims.append(seg(x0, y0, x1, y1, "0.50 pt grey 54%"))
+        prims += [seg(4.775, -3, 4.775, 5), seg(5.225, -3, 5.225, 5)]
+        prims += words(6, 3, "450x300", "EA") + words(6, 2.7, "B.O.D", "4000")
+        drawing = Drawing2D(unit=LengthUnit.METRE, primitives=prims,
+                            layers={n: Layer(name=n) for n in ("0.50 pt grey 54%", OUTLINE, "Text")})
+        project = Project()
+        result = PlanConverter(ConversionSettings(wall_layers=("0.50 pt grey 54%",), wall_height=5)).run(
+            drawing, project.default_storey)
+        (hole,) = [p for p in result.proposals if type(p.element) is Opening]
+        host = next(p for p in result.proposals if p.element.id == hole.element.host_id)
+        CommandBus(project, EventBus()).execute(commit_conversion(result, project))
+        mesh = Tessellator(NumpyKernel()).mesh_for(host.element, project)
+        solid = host.element.length * 0.3 * 5
+        assert mesh.volume() == pytest.approx(solid - 0.52 * 0.37 * 0.3, rel=1e-3)
+        assert any("Duct " in r.item for r in take_off(project) if r.category == "Wall openings")
+        host.accepted = False
+        assert hole.element.id not in {e.id for e in result.accepted_elements()}

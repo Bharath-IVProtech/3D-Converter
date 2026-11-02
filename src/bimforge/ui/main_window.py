@@ -1,10 +1,11 @@
-"""Main window: 3D viewport, project browser, AI review, properties, file and edit commands."""
+"""Main window: 3D viewport, project browser, detection review, properties, file and edit commands."""
 
 from __future__ import annotations
 
 import csv
 import dataclasses
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +13,7 @@ import vtkmodules.qt
 
 vtkmodules.qt.PyQtImpl = "PySide6"
 
-from PySide6.QtCore import QStandardPaths, Qt, QTimer, QUrl  # noqa: E402
+from PySide6.QtCore import QEventLoop, QStandardPaths, Qt, QTimer, QUrl  # noqa: E402
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
 )
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor  # noqa: E402
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera  # noqa: E402
@@ -44,6 +46,7 @@ from bimforge.app.commands import (  # noqa: E402
     RemoveSystem,
     SetIssues,
     commit_conversion,
+    flipped_stair,
 )
 from bimforge.app.events import ElementsChanged, EventBus  # noqa: E402
 from bimforge.adapters.dwg_importer import ODA_DOWNLOAD  # noqa: E402
@@ -121,6 +124,27 @@ def untitled_autosave_dir() -> Path:
     return Path(base) / "autosave"
 
 
+def _underlay_lines(drawing: Drawing2D, k: float) -> np.ndarray:
+    """The drawing's lines as (N, 2, 3) metres, without the duplicates CAD exports often contain."""
+    ends = [(s.start[0] * k, s.start[1] * k, s.end[0] * k, s.end[1] * k) for s in drawing.segments()]
+    if not ends:
+        return np.zeros((0, 2, 3))
+    xy = np.unique(np.round(np.asarray(ends, dtype=np.float64), 4), axis=0)
+    lines = np.full((len(xy), 2, 3), 0.005)
+    lines[:, 0, :2], lines[:, 1, :2] = xy[:, :2], xy[:, 2:]
+    return lines
+
+
+def _write_quantities(project: Project, exporter, path: Path) -> list:
+    rows = take_off(project)
+    exporter(rows, path)
+    return rows
+
+
+class _Cancelled(Exception):
+    """The user cancelled a background job."""
+
+
 class MainWindow(QMainWindow):
     def __init__(self, registry: PluginRegistry) -> None:
         super().__init__()
@@ -135,6 +159,7 @@ class MainWindow(QMainWindow):
         self.drawing: Drawing2D | None = None
         self.result: ConversionResult | None = None
         self.selection: list[str] = []
+        self._ghosts: dict[str, tuple] = {}  # preview key -> shape signature
         self.active_storey_id = self.project.default_storey.id
         self.active_level_only = False
         self.tool: Tool | None = None
@@ -190,13 +215,13 @@ class MainWindow(QMainWindow):
         self.coordination.status_changed.connect(self.set_issue_status)
         self.coordination.comment_requested.connect(self.comment_issue)
         self.coordination.issue_activated.connect(self.zoom_to_issue)
-        self._dock("AI review", self.review, Qt.DockWidgetArea.RightDockWidgetArea)
+        self._dock("Detection review", self.review, Qt.DockWidgetArea.RightDockWidgetArea)
         self._dock("MEP", self.mep, Qt.DockWidgetArea.RightDockWidgetArea)
         self._dock("Coordination", self.coordination, Qt.DockWidgetArea.RightDockWidgetArea)
         docks = {d.objectName(): d for d in self.findChildren(QDockWidget)}
-        self.tabifyDockWidget(docks["AI review"], docks["MEP"])
+        self.tabifyDockWidget(docks["Detection review"], docks["MEP"])
         self.tabifyDockWidget(docks["MEP"], docks["Coordination"])
-        docks["AI review"].raise_()
+        docks["Detection review"].raise_()
         self._dock("Properties", self.properties, Qt.DockWidgetArea.RightDockWidgetArea)
 
         self._build_actions()
@@ -256,6 +281,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self._action(edit_menu, "Move…", self.move_dialog, "Ctrl+M"))
         toolbar.addAction(self._action(edit_menu, "Delete", self.delete_selection, S.Delete))
         self._action(edit_menu, "Copy to level…", self.copy_to_level_dialog, "Ctrl+Shift+C")
+        self._action(edit_menu, "Flip stair direction", self.flip_selected_stairs)
         self._action(edit_menu, "Select all", lambda: self.select([e.id for e in self.project.elements()]), S.SelectAll)
         self._action(edit_menu, "Clear selection", lambda: self.select([]))
         edit_menu.addSeparator()
@@ -283,7 +309,7 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         for category, label in (("architecture", "Architecture"), ("structure", "Structure"),
                                 ("plumbing", "Plumbing"), ("mechanical", "Mechanical"), ("electrical", "Electrical"),
-                                ("proposals", "AI proposals"), (UNDERLAY, "2D underlay")):
+                                ("proposals", "Detected proposals"), (UNDERLAY, "2D underlay")):
             self._action(view_menu, label, lambda on, c=category: self._toggle_category(c, on), checkable=True)
 
         self._action(tools_menu, "Measure", lambda: self.set_tool(MeasureTool(self)), "M")
@@ -313,6 +339,7 @@ class MainWindow(QMainWindow):
         self.selection = []
         self.active_storey_id = project.default_storey.id
         self._host_of.clear()
+        self._ghosts = {}
         self.view.clear()
         self.review.populate([])
         self.properties.show_element(None)
@@ -356,7 +383,10 @@ class MainWindow(QMainWindow):
             else:
                 autosave.unlink(missing_ok=True)
         try:
-            loaded = load_project(source)
+            loaded = self._run_busy(f"Opening {path.name}…", lambda: load_project(source))
+        except _Cancelled:
+            self.statusBar().showMessage("Open cancelled")
+            return
         except ProjectFileError as exc:
             QMessageBox.critical(self, "Open failed", str(exc))
             return
@@ -384,8 +414,9 @@ class MainWindow(QMainWindow):
         return self._save_to(path)
 
     def _save_to(self, path: Path) -> bool:
+        project = self.project
         try:
-            save_project(self.project, path)
+            self._run_busy(f"Saving {path.name}…", lambda: save_project(project, path), cancellable=False)
         except OSError as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
             return False
@@ -482,6 +513,62 @@ class MainWindow(QMainWindow):
                                         1, 5000)
         return {"page": page, "scale": scale} if ok else None
 
+    def _run_busy(self, message: str, work, cancellable: bool = True):
+        """Run slow work on a background thread while the window stays responsive.
+
+        Returns its result or raises its exception; raises _Cancelled if the user cancels.
+        The work may read the project but must not change it or touch Qt. The window is modal
+        from the start, so the user cannot edit what the work is reading. A cancelled thread
+        finishes unseen, so jobs that write files should pass cancellable=False.
+        """
+        outcome: dict = {}
+
+        def target() -> None:
+            try:
+                outcome["value"] = work()
+            except Exception as exc:  # noqa: BLE001 - re-raised on the UI thread below
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
+        dialog = QProgressDialog(message, "Cancel", 0, 0, self)
+        dialog.setWindowTitle("BIMForge")
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        if not cancellable:
+            dialog.setCancelButton(None)
+        # Shown at once so it blocks input, but invisible at first: quick jobs never flash a dialog.
+        dialog.setWindowOpacity(0.0)
+        dialog.show()
+        QTimer.singleShot(400, dialog, lambda: dialog.setWindowOpacity(1.0))
+        self.autosave_timer.stop()
+        loop = QEventLoop()
+        timer = QTimer()
+        timer.setInterval(30)
+        timer.timeout.connect(lambda: loop.quit() if not thread.is_alive() else None)
+        if cancellable:
+            dialog.canceled.connect(loop.quit)
+        timer.start()
+        while True:
+            loop.exec()
+            if not thread.is_alive() or cancellable:
+                break  # (a non-cancellable job ignores the dialog being closed)
+        timer.stop()
+        self.autosave_timer.start(AUTOSAVE_INTERVAL_MS)
+        cancelled = thread.is_alive()
+        if cancellable:
+            dialog.canceled.disconnect(loop.quit)
+        dialog.reset()
+        dialog.hide()
+        dialog.setParent(None)  # deleteLater would wait for this nested event loop's owner to return
+        dialog.deleteLater()
+        if cancelled:
+            raise _Cancelled
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
+
     def import_drawing(self, path: Path) -> None:
         options: dict = {}
         if path.suffix.lower() == ".pdf":
@@ -490,11 +577,10 @@ class MainWindow(QMainWindow):
                 return
         try:
             importer = self.registry.importer_for(path)
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            try:
-                imported = importer.import_file(path, options)
-            finally:
-                QApplication.restoreOverrideCursor()
+            imported = self._run_busy(f"Reading {path.name}…", lambda: importer.import_file(path, options))
+        except _Cancelled:
+            self.statusBar().showMessage("Import cancelled")
+            return
         except Exception as exc:  # noqa: BLE001 - surface any importer failure to the user
             if ODA_DOWNLOAD in str(exc):
                 self._offer_dwg_converter(str(exc))
@@ -525,14 +611,23 @@ class MainWindow(QMainWindow):
     def _convert(self) -> None:
         assert self.drawing is not None
         storey = self.project.storey(self.active_storey_id) or self.project.default_storey
-        self.result = PlanConverter(self.settings).run(self.drawing, storey)
-        k = self.result.unit.to_metres
-        segs = [((s.start[0] * k, s.start[1] * k, 0.005), (s.end[0] * k, s.end[1] * k, 0.005))
-                for s in self.drawing.segments()]
+        drawing, settings = self.drawing, self.settings
+
+        def work():
+            result = PlanConverter(settings).run(drawing, storey)
+            return result, _underlay_lines(drawing, result.unit.to_metres)
+
+        try:
+            self.result, underlay = self._run_busy("Detecting walls, doors, stairs and ducts…", work)
+        except _Cancelled:
+            self.statusBar().showMessage("Conversion cancelled")
+            return
         self.view.clear(UNDERLAY)
-        if segs:
-            self.view.upsert_lines(UNDERLAY, np.asarray(segs), UNDERLAY_STYLE)
+        if len(underlay):
+            self.view.upsert_lines(UNDERLAY, underlay, UNDERLAY_STYLE)
         self.review.populate(self.result.proposals)
+        self.view.clear(GHOST)
+        self._ghosts = {}
         self._show_ghosts()
         self._set_view("iso")
         counts = ", ".join(f"{n} {k}" for k, n in self.result.summary().items()) or "nothing"
@@ -542,16 +637,27 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Import notes", "\n\n".join(notes))
 
     def _show_ghosts(self) -> None:
-        self.view.clear(GHOST)
+        """Update the orange previews, rebuilding only those whose shape changed.
+
+        A wall's shape depends on which of its openings are accepted, so that is its signature.
+        """
+        wanted: dict[str, tuple] = {}
+        preview = Project("preview")
         if self.result is not None:
-            preview = Project("preview")
             preview.site = self.project.site
             for element in self.result.accepted_elements():
                 preview.add(element)
             for element in preview.elements():
-                mesh = self.tessellator.mesh_for(element, preview)
+                holes = preview.hosted_openings(element.id) if isinstance(element, Wall) else []
+                wanted[GHOST + element.id] = tuple(sorted(o.id for o in holes))
+        for key in self._ghosts.keys() - wanted.keys():
+            self.view.remove(key)
+        for key, signature in wanted.items():
+            if self._ghosts.get(key) != signature:
+                mesh = self.tessellator.mesh_for(preview.get(key.removeprefix(GHOST)), preview)
                 if mesh is not None and not mesh.is_empty:
-                    self.view.upsert_mesh(GHOST + element.id, mesh, GHOST_STYLE)
+                    self.view.upsert_mesh(key, mesh, GHOST_STYLE)
+        self._ghosts = wanted
         self.view.render()
 
     def commit_proposals(self) -> None:
@@ -562,6 +668,7 @@ class MainWindow(QMainWindow):
         self.result = None
         self.review.populate([])
         self.view.clear(GHOST)
+        self._ghosts = {}
         self.bus.execute(commit_conversion(result, self.project))
         self.statusBar().showMessage(f"Committed {len(elements)} elements. Ctrl+Z to undo.")
 
@@ -586,7 +693,10 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            warnings = self.registry.exporter_for(Path(path)).export(self.project, Path(path))
+            exporter = self.registry.exporter_for(Path(path))
+            project = self.project
+            warnings = self._run_busy(f"Exporting {Path(path).name}…", lambda: exporter.export(project, Path(path)),
+                                      cancellable=False)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Export failed", str(exc))
             return
@@ -612,6 +722,13 @@ class MainWindow(QMainWindow):
             count = len(self.selection)
             if self._execute(RemoveElements(self.selection, label="Delete")):
                 self.statusBar().showMessage(f"Deleted {count} element(s). Ctrl+Z to undo.")
+
+    def flip_selected_stairs(self) -> None:
+        stairs = [e for i in self.selection if isinstance(e := self.project.get(i), Stair)]
+        if not stairs:
+            self.statusBar().showMessage("Select a stair to flip first")
+            return
+        self._execute(CompositeCommand([ModifyElement(s.id, flipped_stair(s)) for s in stairs], "Flip stair direction"))
 
     def move_dialog(self) -> None:
         if not self.selection:
@@ -822,12 +939,17 @@ class MainWindow(QMainWindow):
         from bimforge.coordination.clash import DEFAULT_TESTS
 
         tests = list(tests) if tests is not None else [t for t in DEFAULT_TESTS if t.default]
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        project, tessellator = self.project, self.tessellator
+
+        def work():
+            detector = ClashDetector(project, tessellator)
+            return [r for test in tests for r in detector.run(test)]
+
         try:
-            detector = ClashDetector(self.project, self.tessellator)
-            results = [r for test in tests for r in detector.run(test)]
-        finally:
-            QApplication.restoreOverrideCursor()
+            results = self._run_busy("Checking for clashes…", work)
+        except _Cancelled:
+            self.statusBar().showMessage("Clash detection cancelled")
+            return
         issues = merge_issues(self.project.issues, results_to_issues(self.project, results), [t.name for t in tests])
         self._execute(SetIssues(issues, "Run clash detection"))
         self.statusBar().showMessage(f"Clash detection: {len(results)} clash(es) in {len(tests)} test(s)")
@@ -877,9 +999,10 @@ class MainWindow(QMainWindow):
         if exporter is None:
             QMessageBox.warning(self, "Quantities", "Choose a .xlsx or .csv file name.")
             return
-        rows = take_off(self.project)
+        project = self.project
         try:
-            exporter(rows, path)
+            rows = self._run_busy("Counting quantities…", lambda: _write_quantities(project, exporter, path),
+                                  cancellable=False)
         except (OSError, ImportError) as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
             return

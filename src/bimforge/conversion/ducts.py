@@ -29,6 +29,9 @@ MIN_STYLE_LENGTH = 1.5  # m of long runs (after joining pieces) before a line st
 ELBOW_REACH = 1.5  # widths: how far a run may be extended to meet another at a corner
 BOD_REACH = 1.0  # m, from a size label to its bottom-of-duct note
 DEFAULT_DEPTH = 0.3
+TRANSITION_GAP = (0.1, 1.5)  # m between the two runs a reducer connects
+TRANSITION_ALIGNMENT = 0.9  # cosine: the runs and the gap must be roughly in line
+CUTOUT_MARGIN = 0.035  # m clearance around a duct where it passes through a wall
 DEFAULT_BOTTOM = 2.7
 NEUTRAL = ("black", "grey", "white", "blue")  # dimensions and text, not discipline colours
 
@@ -36,6 +39,7 @@ _SIZE = re.compile(r"(?<![\dxX×:.])(\d{2,4})\s*[xX×]\s*(\d{2,4})(?![\dxX×])")
 _KIND = re.compile(r"\b(SA|EA|FA|RA)\b")
 _BOD = re.compile(r"\bB\.?\s?O\.?\s?D\.?\b", re.I)
 _NUMBER = re.compile(r"\b(\d{3,5})\b")
+_LOUVRE = re.compile(r"(?<![\dxX])\d{1,2}\s*[xX]\s*(\d{3,4})\s*[xX]\s*(\d{3,4})\s*H", re.I)
 
 
 # Label word -> (system type, system name, display colour)
@@ -66,6 +70,8 @@ class DuctCandidate:
     kind: str
     confidence: float
     labelled: bool
+    colour: str = ""
+    end_width: float | None = None  # transition: width at the end
 
 
 def parse_labels(texts: Sequence[Text], scale: float) -> list[DuctLabel]:
@@ -154,12 +160,13 @@ def detect_ducts(
             best[colour] = (rank, runs)
 
     found: list[DuctCandidate] = []
-    for _, runs in best.values():
+    for colour, (_, runs) in best.items():
         merged = _drop_nested(runs)
         size = _sizer(labels, merged)
         for run in merged:
-            found.append(size(run))
-    return _join_elbows(found)
+            found.append(replace(size(run), colour=colour))
+    joined = _join_elbows(found)
+    return joined + _transitions(joined)
 
 
 def _drop_nested(runs: list[WallCandidate]) -> list[WallCandidate]:
@@ -195,6 +202,27 @@ def _sizer(labels: Sequence[DuctLabel], runs: Sequence[WallCandidate]):
     return size
 
 
+def _transitions(ducts: list[DuctCandidate]) -> list[DuctCandidate]:
+    """Reducers: the short gap between two roughly aligned runs of one system with different widths."""
+    found: list[DuctCandidate] = []
+    for i, a in enumerate(ducts):
+        ua = v.unit(v.sub(a.end, a.start))
+        for b in ducts[i + 1:]:
+            if a.kind != b.kind or abs(a.width - b.width) <= WIDTH_TOLERANCE:
+                continue
+            if abs(v.dot(ua, v.unit(v.sub(b.end, b.start)))) < TRANSITION_ALIGNMENT:
+                continue
+            gap, pa, pb = min(((math.dist(p, q), p, q) for p in (a.start, a.end) for q in (b.start, b.end)),
+                              key=lambda t: t[0])
+            if not TRANSITION_GAP[0] <= gap <= TRANSITION_GAP[1]:
+                continue
+            if abs(v.dot(ua, v.unit(v.sub(pb, pa)))) < TRANSITION_ALIGNMENT:
+                continue
+            bottom = (a.bottom + b.bottom) / 2
+            found.append(DuctCandidate(pa, pb, a.width, a.depth, bottom, a.kind, 0.7, False, a.colour, b.width))
+    return found
+
+
 def _join_elbows(ducts: list[DuctCandidate]) -> list[DuctCandidate]:
     """Extend runs of one air system to meet at corners (elbows are modelled as square corners)."""
     for a in ducts:
@@ -212,3 +240,83 @@ def _join_elbows(ducts: list[DuctCandidate]) -> list[DuctCandidate]:
             elif math.dist(a.end, x) <= reach:
                 a.end = x
     return ducts
+
+
+@dataclass
+class WallHole:
+    """A hole a duct or louvre needs in a wall."""
+
+    kind: str  # "Louvre" or "Duct"
+    wall_index: int
+    offset: float  # along the wall, from its start
+    width: float
+    height: float
+    sill: float
+
+
+def parse_louvre_sizes(texts: Sequence[Text]) -> list[tuple[float, float]]:
+    """(width, height) in metres from schedule notes such as "1X2200X500H." or "1X355X355H.X2400CFM"."""
+    sizes = []
+    for text in texts:
+        match = _LOUVRE.search(text.text)
+        if match:
+            sizes.append((int(match[1]) / 1000, int(match[2]) / 1000))
+    return sizes
+
+
+def find_louvres(segments: Sequence[Segment], colours: set[str], sizes: Sequence[tuple[float, float]],
+                 walls: Sequence, usual_bottom: float) -> list[WallHole]:
+    """A louvre is a duct-coloured line along a wall, inside it, as long as a scheduled louvre is wide."""
+    holes: list[WallHole] = []
+    for seg in segments:
+        if _colour_of(seg.layer) not in colours or " pt " not in seg.layer:
+            continue
+        size = next((s for s in sizes if abs(seg.length - s[0]) <= 0.15 * s[0]), None)
+        if size is None:
+            continue
+        mid = ((seg.start[0] + seg.end[0]) / 2, (seg.start[1] + seg.end[1]) / 2)
+        u = v.unit(v.sub(seg.end, seg.start))
+        for i, wall in enumerate(walls):
+            if abs(v.dot(u, wall.direction)) < 0.99:
+                continue
+            if v.point_segment_distance(mid, wall.start, wall.end) > wall.thickness / 2 + 0.05:
+                continue
+            offset = v.dot(v.sub(mid, wall.start), wall.direction)
+            if any(h.wall_index == i and abs(h.offset - offset) < size[0] for h in holes):
+                break  # the same louvre, drawn with several lines
+            sill = max(min(usual_bottom, wall.height - size[1]), 0.0)
+            holes.append(WallHole("Louvre", i, offset, size[0], size[1], sill))
+            break
+    return holes
+
+
+def duct_wall_holes(ducts: Sequence[DuctCandidate], walls: Sequence) -> list[WallHole]:
+    """Where a duct's centre line crosses a wall below the wall's top, the wall needs a hole.
+
+    A duct that stops at a wall counts too (it ends at a louvre or cutout), so runs
+    are extended by the wall's thickness before testing.
+    """
+    holes: list[WallHole] = []
+    for duct in ducts:
+        if duct.end_width:
+            continue
+        u = v.unit(v.sub(duct.end, duct.start))
+        for i, wall in enumerate(walls):
+            cos_angle = abs(v.dot(u, wall.direction))
+            if cos_angle > 0.98:
+                continue  # running along the wall
+            x = v.line_intersection(duct.start, u, wall.start, wall.direction)
+            if x is None:
+                continue
+            reach = wall.thickness + 0.1
+            along = v.dot(v.sub(x, duct.start), u)
+            offset = v.dot(v.sub(x, wall.start), wall.direction)
+            if not -reach <= along <= math.dist(duct.start, duct.end) + reach:
+                continue
+            width = duct.width / math.sqrt(1 - cos_angle**2) + 2 * CUTOUT_MARGIN
+            height = duct.depth + 2 * CUTOUT_MARGIN
+            sill = duct.bottom - CUTOUT_MARGIN
+            if offset - width / 2 < 0 or offset + width / 2 > wall.length or sill + height > wall.height:
+                continue  # above the wall, or beyond its end
+            holes.append(WallHole("Duct", i, offset, width, height, sill))
+    return holes

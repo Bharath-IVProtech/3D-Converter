@@ -20,9 +20,16 @@ from bimforge.conversion.openings import (
 )
 from bimforge.conversion.rooms import detect_rooms, footprint, ring
 from bimforge.conversion.settings import ConversionSettings
-from bimforge.conversion.ducts import AIR_SYSTEMS, detect_ducts, parse_labels
+from bimforge.conversion.ducts import (
+    AIR_SYSTEMS,
+    detect_ducts,
+    duct_wall_holes,
+    find_louvres,
+    parse_labels,
+    parse_louvre_sizes,
+)
 from bimforge.conversion.fills import filled_elements
-from bimforge.conversion.stairs import detect_stairs
+from bimforge.conversion.stairs import detect_stairs, link_flights, orient_by_notes, walls_clear_of_stairs
 from bimforge.conversion.walls import WallCandidate, hatch_walls, join_corners, merge_collinear, pair_wall_faces
 from bimforge.core.model import Column, DistributionSystem, Door, DuctSegment, Element, Opening, Slab, Space, Stair, Storey, Wall, Window
 from bimforge.core.units import LengthUnit, guess_unit_from_extent
@@ -168,6 +175,11 @@ class PlanConverter:
         for symbol in unplaced:
             warnings.append(f"{symbol.kind.title()} symbol '{symbol.name}' ({symbol.handle}) is not in any wall")
 
+        notes = [((t.position[0] * k, t.position[1] * k), t.text) for t in drawing.of_type(Text)]
+        stairs = link_flights(stairs, walls, notes)
+        orient_by_notes(stairs, notes)
+        walls = walls_clear_of_stairs(walls, stairs)
+
         proposals = self._wall_proposals(walls, storey)
         proposals += self._opening_proposals(openings, proposals, storey, warnings)
         proposals += self._room_and_slab_proposals(walls, storey)
@@ -179,8 +191,9 @@ class PlanConverter:
             columns = [x for x in columns if _within(x.position, box)]
         proposals += self._stair_proposals(stairs, storey)
         proposals += self._column_proposals(columns, storey)
-        duct_proposals, systems = self._duct_proposals(drawing, everything, walls, k, storey)
+        duct_proposals, systems, duct_candidates = self._duct_proposals(drawing, everything, walls, k, storey)
         proposals += duct_proposals
+        proposals += self._hole_proposals(drawing, everything, duct_candidates, proposals, storey)
         top = max((p.element.path[0][2] + p.element.depth / 2 for p in duct_proposals), default=0.0)
         if walls and top > s.wall_height:
             warnings.append(f"Ducts reach {top:.2f} m but walls are {s.wall_height:g} m high, so they float above the "
@@ -257,11 +270,15 @@ class PlanConverter:
     def _stair_proposals(self, stairs: list, storey: Storey) -> list[Proposal]:
         out = []
         for n, c in enumerate(stairs, start=1):
+            total = c.risers + sum(f[3] for f in c.further)
             # Risers of ~170 mm, but never taller than the level.
-            height = round(min(self.settings.wall_height, c.risers * 0.17), 3)
+            height = round(min(self.settings.wall_height, total * 0.17), 3)
             stair = Stair(name=f"Stair {n}", storey_id=storey.id, start=_r(c.start), end=_r(c.end),
-                          width=round(c.width, 3), risers=c.risers, height=height)
-            note = f"{c.risers} treads, going {stair.going * 1000:.0f} mm; check direction and height"
+                          width=round(c.width, 3), risers=c.risers, height=height,
+                          further_flights=[(*_r(a), *_r(b), round(w, 3), r) for a, b, w, r in c.further])
+            shape = f"{len(c.further) + 1} flights with landing" + ("s" if len(c.further) > 1 else "") + ", " if c.further else ""
+            check = "check height" if c.direction_known else "check direction (Edit > Flip stair direction) and height"
+            note = f"{shape}{total} treads, going {stair.going * 1000:.0f} mm; {check}"
             out.append(Proposal(stair, c.confidence, c.confidence >= self.settings.accept_threshold, note=note))
         return out
 
@@ -294,12 +311,45 @@ class PlanConverter:
                 system = systems.setdefault(c.kind, DistributionSystem(name=name, system_type=system_type, color=colour))
             z = round(c.bottom + c.depth / 2, 4)  # the path runs along the duct's centre
             duct = DuctSegment(name=f"{c.kind or 'Duct'}-{n}", storey_id=storey.id, width=c.width, depth=c.depth,
-                               system_id=system.id if system else None,
+                               system_id=system.id if system else None, end_width=c.end_width,
                                path=[(*_r(c.start), z), (*_r(c.end), z)])
             source = "size from label" if c.labelled else "no matching label: size and level assumed"
             note = f"{c.width * 1000:.0f} x {c.depth * 1000:.0f} mm, bottom {c.bottom * 1000:.0f} mm; {source}"
+            if c.end_width:
+                note = f"transition {c.width * 1000:.0f} to {c.end_width * 1000:.0f} mm, between two labelled runs"
             out.append(Proposal(duct, c.confidence, c.confidence >= self.settings.accept_threshold, note=note))
-        return out, list(systems.values())
+        return out, list(systems.values()), candidates
+
+    def _hole_proposals(self, drawing: Drawing2D, everything: list[Segment], ducts: list, proposals: list[Proposal],
+                        storey: Storey) -> list[Proposal]:
+        """Holes in walls for louvres (first, they are exact) and for ducts passing through."""
+        if not ducts:
+            return []
+        walls = [p for p in proposals if isinstance(p.element, Wall)]
+        elements = [p.element for p in walls]
+        bottoms = sorted(c.bottom for c in ducts)
+        colours = {c.colour for c in ducts}
+        sizes = parse_louvre_sizes(drawing.of_type(Text))
+        holes = find_louvres(everything, colours, sizes, elements, bottoms[len(bottoms) // 2])
+        holes += duct_wall_holes(ducts, elements)
+        existing = [p.element for p in proposals if isinstance(p.element, Opening)]
+        out: list[Proposal] = []
+        for n, hole in enumerate(holes, start=1):
+            host = walls[hole.wall_index]
+            opening = Opening(name=f"{hole.kind} opening {n}", storey_id=storey.id, host_id=host.element.id,
+                              offset=hole.offset, width=hole.width, height=hole.height, sill_height=hole.sill)
+            span = opening.span
+            if span[0] < 0 or span[1] > host.element.length or opening.sill_height + opening.height > host.element.height:
+                continue
+            # The wall builder cannot stack openings, so any overlap along the wall conflicts.
+            if any(self._overlaps(opening, other) for other in existing):
+                continue
+            existing.append(opening)
+            confidence = min(0.7, host.confidence)
+            out.append(Proposal(opening, confidence, confidence >= self.settings.accept_threshold,
+                                note=f"{hole.width * 1000:.0f} x {hole.height * 1000:.0f} mm at "
+                                     f"{hole.sill * 1000:.0f} mm; check the sill"))
+        return out
 
     def _is_named_wall(self, layer: str) -> bool:
         return layer in self._wall_layers or classify_name(layer) is LayerRole.WALL

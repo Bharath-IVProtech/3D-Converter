@@ -1,6 +1,6 @@
 """Every model mutation is a Command, which gives undo/redo, events and an audit trail.
 
-UI tools, AI proposals and natural-language requests all end up here.
+UI tools, detected proposals and natural-language requests all end up here.
 """
 
 from __future__ import annotations
@@ -171,7 +171,11 @@ def translation_changes(element: Element, dx: float, dy: float, project: Project
     def shift(p):
         return (p[0] + dx, p[1] + dy, *p[2:])
 
-    if isinstance(element, (Wall, Stair)):
+    if isinstance(element, Stair):
+        return {"start": shift(element.start), "end": shift(element.end),
+                "further_flights": [(x0 + dx, y0 + dy, x1 + dx, y1 + dy, w, r)
+                                    for x0, y0, x1, y1, w, r in element.further_flights]}
+    if isinstance(element, Wall):
         return {"start": shift(element.start), "end": shift(element.end)}
     if isinstance(element, Column):
         return {"position": shift(element.position)}
@@ -190,6 +194,15 @@ def translation_changes(element: Element, dx: float, dy: float, project: Project
     if isinstance(element, Fixture):
         return {"position": shift(element.position)}
     return {}
+
+
+def flipped_stair(stair: Stair) -> dict[str, object]:
+    """Field changes that reverse a staircase's climbing direction: top becomes bottom."""
+    first, *rest = [(end, start, width, risers) for start, end, width, risers in reversed(stair.flights)]
+    return {
+        "start": first[0], "end": first[1], "width": first[2], "risers": first[3],
+        "further_flights": [(*a, *b, width, risers) for a, b, width, risers in rest],
+    }
 
 
 JOIN_TOLERANCE = 0.01

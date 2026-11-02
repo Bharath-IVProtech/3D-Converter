@@ -1,4 +1,4 @@
-"""Dockable panels and dialogs: AI review, project browser, properties, settings, move."""
+"""Dockable panels and dialogs: detection review, project browser, properties, settings, move."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from bimforge.conversion import ConversionSettings, Proposal
-from bimforge.core.model import Element, Project, Space, Wall
+from bimforge.core.model import Element, Project, Space, Stair, Wall
 from bimforge.core.units import LengthUnit
 
 ID_ROLE = Qt.ItemDataRole.UserRole
@@ -43,7 +43,7 @@ def confidence_color(confidence: float) -> QColor:
 
 
 class ReviewPanel(QWidget):
-    """Lists AI/rule proposals with confidence; the user accepts or rejects each before commit."""
+    """Lists detected proposals with confidence; the user accepts or rejects each before commit."""
 
     acceptance_changed = Signal()
     selection_changed = Signal(list)  # element ids
@@ -183,7 +183,8 @@ class PropertiesPanel(QTreeWidget):
 
     edit_requested = Signal(str, str, object)  # element id, field name, parsed value
 
-    READ_ONLY = {"id", "storey_id", "type_id", "host_id", "system_id", "properties", "boundary", "path"}
+    READ_ONLY = {"id", "storey_id", "type_id", "host_id", "system_id", "properties", "boundary", "path",
+                 "further_flights"}
     GREY = QBrush(QColor(128, 128, 128))
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -222,6 +223,10 @@ class PropertiesPanel(QTreeWidget):
             self._row("Class", f"{type(element).__name__} ({element.ifc_class})", False)
             if isinstance(element, Wall):
                 self._row("Length", f"{element.length:.3f}", False)
+            if isinstance(element, Stair):
+                self._row("Flights", str(len(element.flights)), False)
+                self._row("Total risers", str(element.total_risers), False)
+                self._row("Riser height", f"{element.riser_height * 1000:.0f} mm", False)
             if isinstance(element, Space):
                 self._row("Area", f"{element.area:.2f} m²", False)
             for f in dataclasses.fields(element):

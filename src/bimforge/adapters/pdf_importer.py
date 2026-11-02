@@ -131,11 +131,18 @@ class PdfImporter(Importer):
 
     @staticmethod
     def inspect(path: Path) -> list[int | None]:
-        """Detected scale per page (None where no "1:N" note was found)."""
-        import pdfplumber
+        """Detected scale per page (None where no "1:N" note was found).
 
-        with pdfplumber.open(str(path)) as pdf:
-            return [detect_scale(page.extract_text() or "") for page in pdf.pages]
+        Uses PDFium's native text reader: on a large sheet it takes a fraction of a second,
+        where pdfplumber would parse every line on the page (several seconds) just to read a note.
+        """
+        import pypdfium2
+
+        document = pypdfium2.PdfDocument(str(path))
+        try:
+            return [detect_scale(page.get_textpage().get_text_range() or "") for page in document]
+        finally:
+            document.close()
 
     def import_file(self, path: Path, options: Mapping[str, Any] | None = None) -> ImportResult:
         import pdfplumber

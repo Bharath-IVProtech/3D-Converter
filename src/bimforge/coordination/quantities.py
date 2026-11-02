@@ -16,6 +16,7 @@ from bimforge.core.model import (
     Element,
     Fixture,
     ImportedElement,
+    Opening,
     PipeSegment,
     Project,
     Slab,
@@ -62,12 +63,18 @@ def take_off(project: Project) -> list[QuantityRow]:
     for opening in project.elements_of(Door) + project.elements_of(Window):
         add(f"{type(opening).__name__}s", f"{opening.width * 1000:.0f} × {opening.height * 1000:.0f} mm",
             opening, "nr", 1)
+    for opening in project.elements_of(Opening):
+        if type(opening) is Opening:  # plain holes: duct openings and louvres
+            add("Wall openings", f"{opening.name.split(' ')[0]} {opening.width * 1000:.0f} x "
+                                 f"{opening.height * 1000:.0f} mm", opening, "nr", 1)
     for slab in project.elements_of(Slab):
         area = _area(list(slab.boundary))
         add("Slabs", f"Slab {slab.thickness * 1000:.0f} mm - area", slab, "m²", area)
         add("Slabs", f"Slab {slab.thickness * 1000:.0f} mm - volume", slab, "m³", area * slab.thickness)
     for stair in project.elements_of(Stair):
-        add("Stairs", f"Stair {stair.width * 1000:.0f} mm wide, {stair.risers} risers", stair, "nr", 1)
+        flights = len(stair.flights)
+        shape = f"{flights} flights, " if flights > 1 else ""
+        add("Stairs", f"Stair {stair.width * 1000:.0f} mm wide, {shape}{stair.total_risers} risers", stair, "nr", 1)
     for column in project.elements_of(Column):
         item = f"Column {column.width * 1000:.0f} x {column.depth * 1000:.0f} mm"
         add("Columns", f"{item} - volume", column, "m³", column.width * column.depth * column.height)
@@ -87,9 +94,12 @@ def take_off(project: Project) -> list[QuantityRow]:
         system = project.systems.get(duct.system_id) if duct.system_id else None
         kind = system.name if system else "unassigned"
         item = f"Duct {duct.width * 1000:.0f} x {duct.depth * 1000:.0f} mm, {kind}"
+        if duct.end_width:
+            item = f"Transition {duct.width * 1000:.0f} to {duct.end_width * 1000:.0f} x {duct.depth * 1000:.0f} mm, {kind}"
         length = path_length(duct.path)
         add("Ducts", f"{item} - length", duct, "m", length)
-        add("Ducts", f"{item} - sheet area", duct, "m²", 2 * (duct.width + duct.depth) * length)
+        mean_width = (duct.width + (duct.end_width or duct.width)) / 2
+        add("Ducts", f"{item} - sheet area", duct, "m²", 2 * (mean_width + duct.depth) * length)
     for fixture in project.elements_of(Fixture):
         family = family_of(fixture)
         category = "Plumbing fixtures" if family and family.discipline.value == "plumbing" else "Electrical fixtures"

@@ -6,6 +6,7 @@ import math
 from collections.abc import Sequence
 
 import numpy as np
+from shapely.geometry import MultiPoint
 
 from bimforge.core.model import (
     CableCarrierSegment,
@@ -27,7 +28,7 @@ from bimforge.core.model import (
 )
 from bimforge.disciplines.catalog import family_of
 from bimforge.geometry.mesh import Mesh
-from bimforge.geometry.sweep import placed_box, rect_run, tube
+from bimforge.geometry.sweep import placed_box, rect_run, tapered_run, tube
 from bimforge.plugins.sdk import GeometryKernel
 
 # (start, end, bottom, top) in wall-local coordinates: along the wall and above its base.
@@ -95,20 +96,35 @@ def opening_mesh(opening: Opening, host: Wall, base_z: float, kernel: GeometryKe
 
 
 def stair_mesh(stair: Stair, base_z: float, kernel: GeometryKernel) -> Mesh:
-    """Solid stepped flight: one block per riser, each rising to its tread."""
-    (sx, sy), (ex, ey) = stair.start, stair.end
-    length = stair.length
-    ux, uy = (ex - sx) / length, (ey - sy) / length
-    nx, ny = -uy, ux
-    h = stair.width / 2
-    g, r = stair.going, stair.riser_height
+    """Solid stair: one block per riser, each rising to its tread, and landings between the flights.
+
+    The steps keep climbing across all flights, so the staircase is continuous from bottom to top.
+    """
+    r = stair.riser_height
     z0 = base_z + stair.base_offset
     blocks = []
-    for k in range(stair.risers):
-        a, b = k * g, (k + 1) * g
-        profile = [(sx + ux * s + nx * side * h, sy + uy * s + ny * side * h)
-                   for s, side in ((a, -1), (b, -1), (b, 1), (a, 1))]
-        blocks.append(kernel.extrude(profile, z0, (k + 1) * r))
+    climbed = 0  # risers so far
+    previous_end: list[Point2] | None = None  # corners of the last flight's top edge
+    for (sx, sy), (ex, ey), width, risers in stair.flights:
+        length = math.dist((sx, sy), (ex, ey))
+        ux, uy = (ex - sx) / length, (ey - sy) / length
+        nx, ny = -uy, ux
+        h = width / 2
+        g = length / risers
+
+        def edge(s: float) -> list[Point2]:
+            return [(sx + ux * s + nx * side * h, sy + uy * s + ny * side * h) for side in (-1, 1)]
+
+        if previous_end is not None:
+            # The landing joins the last flight's top edge to this flight's bottom edge, at the height reached.
+            outline = MultiPoint(previous_end + edge(0.0)).convex_hull
+            if outline.geom_type == "Polygon" and outline.area > 1e-6:
+                blocks.append(kernel.extrude(list(outline.exterior.coords)[:-1], z0, climbed * r))
+        for k in range(risers):
+            a, b = edge(k * g), edge((k + 1) * g)
+            blocks.append(kernel.extrude([a[0], b[0], b[1], a[1]], z0, (climbed + k + 1) * r))
+        climbed += risers
+        previous_end = edge(length)
     return Mesh.merge(blocks)
 
 
@@ -154,6 +170,9 @@ class Tessellator:
             if element.carrier_type == "CONDUITSEGMENT":
                 return tube(_lift(element.path, base_z), element.width / 2, sides=8)
             return rect_run(_lift(element.path, base_z), element.width, element.depth)
+        if isinstance(element, DuctSegment) and element.end_width and len(element.path) == 2:
+            start, end = _lift(element.path, base_z)
+            return tapered_run(start, end, element.width, element.end_width, element.depth)
         if isinstance(element, DuctSegment) and len(element.path) >= 2:
             return rect_run(_lift(element.path, base_z), element.width, element.depth)
         if isinstance(element, Fixture):

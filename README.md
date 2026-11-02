@@ -38,7 +38,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1    # build 
 
 1. **File > Import…** (Ctrl+I) opens a DXF plan, or an IFC model.
 2. Detected elements appear as orange previews over the 2D underlay.
-3. Accept or reject them in **AI review**, then **Commit to model**.
+3. Accept or reject them in **Detection review**, then **Commit to model**.
 4. **Ctrl+Z** undoes the whole conversion.
 5. **Export** writes IFC.
 6. **Conversion settings** changes the defaults (wall height, sill height and so on) and re-runs detection.
@@ -93,7 +93,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1    # build 
   - **Walls:** pairs of parallel face lines (the two faces may use different line weights), wide polylines, hatched or solid-filled (poché) bands, and a single face line with hatching along one side.
   - **Doors:** blocks, or swing arcs (true arcs or arcs flattened into short lines, including double doors).
   - **Windows:** blocks, or glazing lines across a wall gap.
-  - **Stairs:** runs of 4 or more evenly spaced treads at any angle. Check the climbing direction and height before committing.
+  - **Stairs:** runs of 4 or more evenly spaced treads at any angle. Flights joined by a landing become one continuous staircase. UP/DN notes set the direction; otherwise check it and use **Edit > Flip stair direction**.
   - **Columns:** small filled rectangles.
   - **HVAC ducts:** outline pairs matched to size labels such as `800x300 EA` and `B.O.D 4150`, or layers named DUCT/HVAC.
   - **Rooms and floor slab:** derived from the walls.

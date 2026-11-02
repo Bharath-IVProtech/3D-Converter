@@ -19,14 +19,16 @@ def _frame(direction: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return side, np.cross(direction, side)  # (side, up, direction) is right-handed
 
 
-def _prism(a: np.ndarray, b: np.ndarray, profile: np.ndarray) -> Mesh:
-    """Closed prism from a to b with a CCW 2D profile given in the (side, up) frame."""
+def _prism(a: np.ndarray, b: np.ndarray, profile: np.ndarray, end_profile: np.ndarray | None = None) -> Mesh:
+    """Closed prism from a to b with a CCW 2D profile in the (side, up) frame; end_profile makes it taper."""
     d = b - a
     d /= np.linalg.norm(d)
     side, up = _frame(d)
     ring = profile[:, :1] * side + profile[:, 1:] * up
+    end = profile if end_profile is None else end_profile
+    end_ring = end[:, :1] * side + end[:, 1:] * up
     n = len(profile)
-    vertices = np.vstack([a + ring, b + ring, a, b])
+    vertices = np.vstack([a + ring, b + end_ring, a, b])
     i = np.arange(n)
     j = (i + 1) % n
     ca, cb = 2 * n, 2 * n + 1
@@ -55,6 +57,18 @@ def rect_run(path: Sequence[Point3], width: float, depth: float) -> Mesh:
     w, h = width / 2, depth / 2
     profile = np.array([[-w, -h], [w, -h], [w, h], [-w, h]])
     return Mesh.merge(_prism(a, b, profile) for a, b in _legs(path))
+
+
+def tapered_run(start: Point3, end: Point3, start_width: float, end_width: float, depth: float) -> Mesh:
+    """Rectangular transition whose width changes along its length (a duct reducer)."""
+    h = depth / 2
+
+    def profile(width: float) -> np.ndarray:
+        w = width / 2
+        return np.array([[-w, -h], [w, -h], [w, h], [-w, h]])
+
+    a, b = np.asarray(start, dtype=np.float64), np.asarray(end, dtype=np.float64)
+    return _prism(a, b, profile(start_width), profile(end_width))
 
 
 def placed_box(position: Point3, size: tuple[float, float, float], rotation_deg: float) -> Mesh:

@@ -8,6 +8,7 @@ Crop values are fractions of the page (0-1).
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 from bimforge.adapters.pdf_importer import MM_PER_PT, PdfImporter
@@ -47,12 +48,15 @@ def render_overlay(pdf: Path, out: Path, crop=(0.0, 0.0, 1.0, 1.0), zoom: float 
             draw.line([px(e.path[0][:2]), px(e.path[-1][:2])], fill=COLOURS[DuctSegment] + (150,),
                       width=max(2, int(e.width * k * zoom)))
         elif isinstance(e, Stair):
-            ux, uy = (e.end[0] - e.start[0]) / e.length, (e.end[1] - e.start[1]) / e.length
-            h = e.width / 2
-            corners = [(e.start[0] - uy * h * s_, e.start[1] + ux * h * s_) for s_ in (1, -1)]
-            corners += [(e.end[0] - uy * h * s_, e.end[1] + ux * h * s_) for s_ in (-1, 1)]
-            draw.polygon([px(c) for c in corners], outline=COLOURS[Stair] + (255,), fill=COLOURS[Stair] + (70,))
-            draw.line([px(e.start), px(e.end)], fill=COLOURS[Stair] + (255,), width=4)
+            route = []
+            for a, b, width, _ in e.flights:
+                ux, uy = (b[0] - a[0]) / math.dist(a, b), (b[1] - a[1]) / math.dist(a, b)
+                h = width / 2
+                corners = [(a[0] - uy * h * s_, a[1] + ux * h * s_) for s_ in (1, -1)]
+                corners += [(b[0] - uy * h * s_, b[1] + ux * h * s_) for s_ in (-1, 1)]
+                draw.polygon([px(c) for c in corners], outline=COLOURS[Stair] + (255,), fill=COLOURS[Stair] + (70,))
+                route += [px(a), px(b)]
+            draw.line(route, fill=COLOURS[Stair] + (255,), width=4)  # one line: one staircase
         elif isinstance(e, Column):
             r = max(e.width, e.depth) / 2
             draw.rectangle([px((e.position[0] - r, e.position[1] + r)), px((e.position[0] + r, e.position[1] - r))],

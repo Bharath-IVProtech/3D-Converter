@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from bimforge.core.model import Column, DuctSegment, Element, Opening, Point2, Project, Slab, Space, Stair, Wall
 
 EPS = 1e-9
@@ -43,7 +45,9 @@ def validate(element: Element, project: Project) -> list[str]:
     elif isinstance(element, Stair):
         if element.length <= 0.1 or element.width <= 0:
             errors.append(f"{label}: length and width must be positive")
-        if element.risers < 2 or element.height <= 0:
+        if any(math.dist(a, b) <= 0.1 or width <= 0 or risers < 1 for a, b, width, risers in element.flights):
+            errors.append(f"{label}: every flight needs a length, a width and at least one riser")
+        if element.total_risers < 2 or element.height <= 0:
             errors.append(f"{label}: needs at least 2 risers and a positive height")
     elif isinstance(element, DuctSegment):
         if element.width <= 0 or element.depth <= 0 or len(element.path) < 2:

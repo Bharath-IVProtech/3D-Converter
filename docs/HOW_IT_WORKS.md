@@ -159,6 +159,10 @@ A group of lines counts as a stair flight when:
 - each is **0.6–3 m long** (the stair width),
 - they are **evenly spaced 200–360 mm apart** (the tread depth).
 
+**Flights are then joined into one staircase.** Two flights belong together when an end of one is within 2.5 m of an end of the other, they have similar widths and the same tread depth, and no long wall lies between them. This handles U-turn (dog-leg), straight and angled landings. The result is one staircase: first flight, landing, next flight, with the steps climbing continuously to the top. Short "walls" found on a stair's flights or landing are handrails or landing edges, so they're removed.
+
+An **UP** or **DN** note on the drawing tells BIMForge which end is the bottom, and also which end of a U-turn stair has the landing. Without a note, the direction is a guess: use **Edit → Flip stair direction**.
+
 Very long evenly spaced lines (like table rows in the title block) don't count. Stairs found outside the building (in a legend or key plan) are thrown away.
 
 ### Step 5 – Finding walls
@@ -247,11 +251,14 @@ A duct is drawn as two parallel outline lines the duct's width apart, usually in
 3. **Join the pieces:** a fan or damper splits a duct's outline, so pieces on one line are joined across gaps of up to 1 m.
 4. **Size each run** from the nearest label of the same width, and place it at that label's height. Runs of one air system are extended to meet at corners.
 
+5. **Connect different sizes:** a short gap between two aligned runs of different widths becomes a tapered **transition** (a reducer).
+6. **Cut the walls:** where a duct passes through or stops at a wall, below the wall's top, the wall gets a real hole with 35 mm clearance all round. **Louvres** come from schedule notes such as `1X2200X500H`: a duct-coloured line that long, lying inside a wall, becomes an opening of that size.
+
 Each air type becomes a system with its own colour. A wall-height note appears if ducts would float above the walls.
 
 ### Step 9 – Review: you stay in control
 
-Everything found is shown in the **AI review** panel with a **confidence score**, and as orange see-through shapes in the 3D view:
+Everything found is shown in the **Detection review** panel with a **confidence score**, and as orange see-through shapes in the 3D view:
 
 | Colour | Confidence | Meaning |
 |---|---|---|
@@ -275,7 +282,7 @@ Each object is turned into a 3D shape by **extrusion**: its outline is drawn on 
 ```
 
 - **Walls with openings** are built as several blocks around each hole: one each side of a window, plus one below it and one above it. That leaves a real hole in the wall.
-- **Stairs** are built as one block per step, each a riser higher than the last.
+- **Stairs** are built as one block per step, each a riser higher than the last, across all flights, with a solid landing between flights.
 - **Pipes and conduits** are tubes along their path. **Cable trays and ducts** are rectangular channels. **Fixtures** (WC, basin, socket…) are boxes of the right size.
 
 The 3D view uses **VTK**, a well-known open-source 3D engine. You can rotate, zoom, pan, click to select, show or hide disciplines, cut the view with a section box, and measure.
@@ -411,7 +418,7 @@ The DWG reader is an example: it's a separate plug-in that uses an outside progr
 
 ## 10. How we know it works
 
-- **240 automated tests** run in a few seconds. They check the geometry maths, wall and stair detection, door arcs, PDF reading, saving and loading, IFC round trips, clash detection, pipe sizing, electrical calculations, undo/redo, and more. Many tests use tricky drawings on purpose: plans hidden inside blocks, walls on oddly named layers, tables that look like walls, doors drawn as short lines.
+- **270 automated tests** run in a few seconds. They check the geometry maths, wall and stair detection, door arcs, PDF reading, saving and loading, IFC round trips, clash detection, pipe sizing, electrical calculations, undo/redo, and more. Many tests use tricky drawings on purpose: plans hidden inside blocks, walls on oddly named layers, tables that look like walls, doors drawn as short lines.
 - **Overlay checks:** a developer tool draws everything BIMForge detected (walls in red, doors in green, stairs in purple) on top of the original PDF. Any difference from the drawing is visible at a glance:
 
   ```
@@ -429,9 +436,13 @@ The DWG reader is an example: it's a separate plug-in that uses an outside progr
 | **Scanned PDFs and photos** have no lines to read | Use a vector PDF, DXF or DWG |
 | **DWG** needs the free ODA File Converter installed | Install it once, or save as DXF from your CAD program |
 | **Walls drawn as a single thin line**, with no thickness or hatching | Not detected yet |
-| **Stair direction and height are guessed** (a plan doesn't show which end is up) | Check each stair in **Properties** |
+| **Stair direction and height are guessed** unless the drawing has an UP or DN note. Height assumes 170 mm risers. | Use **Edit → Flip stair direction**, and check **Riser height** in **Properties** |
+| **U-turn stairs without a note:** a plan doesn't show which end has the landing, so it can be on the wrong end | Add an UP note to the drawing, or check it in review |
+| **Landing shape** is the area joining the two flights' ends, not the exact outline drawn | Usually close; check it against the plan |
 | **Curved walls** are imported as exact shapes, not editable walls | Edit them in the source program |
-| **Duct fittings:** tapered transitions and fans aren't modelled, and curved elbows become square corners | Straight runs are placed correctly; add fittings by hand if needed |
+| **Duct fittings:** fans aren't modelled, a transition beside a fan runs through the fan's space, and curved elbows become square corners | Straight runs and reducers are placed correctly; add the rest by hand if needed |
+| **Stacked openings:** a wall can't have one opening above another, so a louvre above a door is skipped | Add it after the import, or check the review list |
+| **Louvre height** is taken from the ducts' usual level, because the note gives no sill | Check each one in **Properties** |
 | **Plumbing and electrical tables are indicative** (IPC / IEC values) | Check against your local code before real design use |
 
 ---
@@ -485,7 +496,7 @@ src/bimforge/
 ├── render/         The 3D viewer (VTK)
 ├── ui/             The windows, panels and tools you click on
 └── devtools/       Sample drawings and the overlay checking tool
-tests/              240 automated tests
+tests/              270 automated tests
 docs/               This guide and the technical design document (DESIGN.md)
 packaging/          Script that builds BIMForge.exe
 ```
