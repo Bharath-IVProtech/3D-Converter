@@ -95,6 +95,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1    # build 
   - **Windows:** blocks, or glazing lines across a wall gap.
   - **Stairs:** runs of 4 or more evenly spaced treads at any angle. Check the climbing direction and height before committing.
   - **Columns:** small filled rectangles.
+  - **HVAC ducts:** outline pairs matched to size labels such as `800x300 EA` and `B.O.D 4150`, or layers named DUCT/HVAC.
   - **Rooms and floor slab:** derived from the walls.
 - **Short isolated wall pieces** (often equipment plinths) are proposed but left unticked.
 - **Check a PDF's conversion** by overlaying the detected elements on the sheet: `python -m bimforge.devtools.overlay plan.pdf check.png`.

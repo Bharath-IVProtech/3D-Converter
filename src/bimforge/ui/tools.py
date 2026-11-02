@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from bimforge.app.commands import AddElements
+from bimforge.conversion.ducts import AIR_SYSTEMS
 from bimforge.core.model import CableCarrierSegment, Fixture, PipeSegment, Point3, SystemType
 from bimforge.disciplines.catalog import FAMILIES, connection_point
 from bimforge.disciplines.plumbing import DRAINAGE_TYPES, apply_slope, min_drain_slope
@@ -227,4 +228,5 @@ DEFAULT_SYSTEM_COLORS = {
     SystemType.POWER: (0.95, 0.55, 0.1),
     SystemType.LIGHTING: (0.95, 0.85, 0.2),
     SystemType.DATA: (0.6, 0.35, 0.85),
+    **{system_type: colour for system_type, _, colour in AIR_SYSTEMS.values()},
 }

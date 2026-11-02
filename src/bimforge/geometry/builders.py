@@ -11,6 +11,7 @@ from bimforge.core.model import (
     CableCarrierSegment,
     Column,
     Door,
+    DuctSegment,
     Element,
     Fixture,
     ImportedElement,
@@ -152,6 +153,8 @@ class Tessellator:
         if isinstance(element, CableCarrierSegment) and len(element.path) >= 2:
             if element.carrier_type == "CONDUITSEGMENT":
                 return tube(_lift(element.path, base_z), element.width / 2, sides=8)
+            return rect_run(_lift(element.path, base_z), element.width, element.depth)
+        if isinstance(element, DuctSegment) and len(element.path) >= 2:
             return rect_run(_lift(element.path, base_z), element.width, element.depth)
         if isinstance(element, Fixture):
             family = family_of(element)

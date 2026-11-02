@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from bimforge.core.model import Column, Element, Opening, Point2, Project, Slab, Space, Stair, Wall
+from bimforge.core.model import Column, DuctSegment, Element, Opening, Point2, Project, Slab, Space, Stair, Wall
 
 EPS = 1e-9
 
@@ -45,6 +45,9 @@ def validate(element: Element, project: Project) -> list[str]:
             errors.append(f"{label}: length and width must be positive")
         if element.risers < 2 or element.height <= 0:
             errors.append(f"{label}: needs at least 2 risers and a positive height")
+    elif isinstance(element, DuctSegment):
+        if element.width <= 0 or element.depth <= 0 or len(element.path) < 2:
+            errors.append(f"{label}: needs a positive size and at least 2 path points")
     elif isinstance(element, Column):
         if min(element.width, element.depth, element.height) <= 0:
             errors.append(f"{label}: width, depth and height must be positive")

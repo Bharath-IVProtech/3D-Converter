@@ -66,6 +66,7 @@ def pair_wall_faces(
     segments: Sequence[Segment],
     settings: ConversionSettings,
     layer_scores: Mapping[str, float] | None = None,
+    longest_first: bool = False,
 ) -> list[WallCandidate]:
     """Match parallel face lines into wall centrelines.
 
@@ -115,7 +116,11 @@ def pair_wall_faces(
             pairs.append(_Pair(i, jj, (lo, hi), _project_range(b, p_, q_), float(offset[k]), float(score)))
 
     # Thinnest first: a face pairs with its nearest parallel partner, not one across a room.
-    pairs.sort(key=lambda p: (round(abs(p.offset), 4), -(p.a_range[1] - p.a_range[0])))
+    # (longest_first suits callers that already know the spacing, so only the run length is in question.)
+    if longest_first:
+        pairs.sort(key=lambda p: -(p.a_range[1] - p.a_range[0]))
+    else:
+        pairs.sort(key=lambda p: (round(abs(p.offset), 4), -(p.a_range[1] - p.a_range[0])))
     used: dict[int, list[tuple[float, float]]] = {}
     walls: list[WallCandidate] = []
     for p in pairs:

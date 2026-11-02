@@ -12,10 +12,10 @@ from pathlib import Path
 
 from bimforge.adapters.pdf_importer import MM_PER_PT, PdfImporter
 from bimforge.conversion import ConversionSettings, PlanConverter
-from bimforge.core.model import Column, Door, Opening, Project, Space, Stair, Wall, Window
+from bimforge.core.model import Column, Door, DuctSegment, Opening, Project, Space, Stair, Wall, Window
 
 COLOURS = {Wall: (230, 30, 30), Door: (30, 160, 30), Window: (30, 90, 230), Space: (255, 170, 0),
-           Stair: (150, 40, 200), Column: (20, 20, 20)}
+           Stair: (150, 40, 200), Column: (20, 20, 20), DuctSegment: (255, 0, 200)}
 
 
 def render_overlay(pdf: Path, out: Path, crop=(0.0, 0.0, 1.0, 1.0), zoom: float = 2.0,
@@ -43,6 +43,9 @@ def render_overlay(pdf: Path, out: Path, crop=(0.0, 0.0, 1.0, 1.0), zoom: float 
         e = proposal.element
         if isinstance(e, Wall):
             draw.line([px(e.start), px(e.end)], fill=COLOURS[Wall] + (200,), width=max(2, int(e.thickness * k * zoom)))
+        elif isinstance(e, DuctSegment):
+            draw.line([px(e.path[0][:2]), px(e.path[-1][:2])], fill=COLOURS[DuctSegment] + (150,),
+                      width=max(2, int(e.width * k * zoom)))
         elif isinstance(e, Stair):
             ux, uy = (e.end[0] - e.start[0]) / e.length, (e.end[1] - e.start[1]) / e.length
             h = e.width / 2

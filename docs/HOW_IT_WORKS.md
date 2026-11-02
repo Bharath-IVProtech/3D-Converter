@@ -238,6 +238,17 @@ the two pieces are **joined into one wall**, and the door or window is placed in
 
 Once the walls are known, BIMForge traces their centre lines like a map and finds every **closed area** of at least 1 m². Each one becomes a **room**, with its area calculated. The **floor slab** is the outline of all the rooms together, grown out to the outer face of the walls.
 
+### Step 8b – HVAC ducts
+
+A duct is drawn as two parallel outline lines the duct's width apart, usually in a discipline colour, with a label such as **"800x300 EA"** and **"B.O.D 4150"** (bottom of duct, 4150 mm above the level). BIMForge uses the labels as its main evidence:
+
+1. **Read the labels** to get widths, depths, air type (SA, EA, FA, RA) and heights. Text like "Wall cutout:425x425" or "1X355X355H" isn't a duct label, because it has no air-type word beside it.
+2. **Find outlines:** in each colour, the heaviest line weight whose parallel lines are spaced at a labelled width. Grey, black and blue are skipped, since those are walls, text and dimensions. In CAD files, layers named DUCT or HVAC are used too.
+3. **Join the pieces:** a fan or damper splits a duct's outline, so pieces on one line are joined across gaps of up to 1 m.
+4. **Size each run** from the nearest label of the same width, and place it at that label's height. Runs of one air system are extended to meet at corners.
+
+Each air type becomes a system with its own colour. A wall-height note appears if ducts would float above the walls.
+
 ### Step 9 – Review: you stay in control
 
 Everything found is shown in the **AI review** panel with a **confidence score**, and as orange see-through shapes in the 3D view:
@@ -265,7 +276,7 @@ Each object is turned into a 3D shape by **extrusion**: its outline is drawn on 
 
 - **Walls with openings** are built as several blocks around each hole: one each side of a window, plus one below it and one above it. That leaves a real hole in the wall.
 - **Stairs** are built as one block per step, each a riser higher than the last.
-- **Pipes and conduits** are tubes along their path. **Cable trays** are rectangular channels. **Fixtures** (WC, basin, socket…) are boxes of the right size.
+- **Pipes and conduits** are tubes along their path. **Cable trays and ducts** are rectangular channels. **Fixtures** (WC, basin, socket…) are boxes of the right size.
 
 The 3D view uses **VTK**, a well-known open-source 3D engine. You can rotate, zoom, pan, click to select, show or hide disciplines, cut the view with a section box, and measure.
 
@@ -362,6 +373,7 @@ These find **rule problems** rather than collisions:
 - room areas,
 - stairs and columns,
 - pipe and cable-tray lengths by size,
+- duct lengths and sheet area by size,
 - fixtures by type.
 
 ---
@@ -373,7 +385,7 @@ These find **rule problems** rather than collisions:
 - walls with **real holes** where the doors and windows are,
 - doors and windows **filling** those holes,
 - slabs, rooms, stairs and columns,
-- pipes, cable trays and fixtures, grouped into their **systems**,
+- pipes, ducts, cable trays and fixtures, grouped into their **systems**,
 - levels with their elevations.
 
 Every object keeps the **same ID** every time you export, and objects imported from an IFC keep their **original ID**. Other programs can therefore recognise them as the same objects after an update.
@@ -399,7 +411,7 @@ The DWG reader is an example: it's a separate plug-in that uses an outside progr
 
 ## 10. How we know it works
 
-- **217 automated tests** run in a few seconds. They check the geometry maths, wall and stair detection, door arcs, PDF reading, saving and loading, IFC round trips, clash detection, pipe sizing, electrical calculations, undo/redo, and more. Many tests use tricky drawings on purpose: plans hidden inside blocks, walls on oddly named layers, tables that look like walls, doors drawn as short lines.
+- **240 automated tests** run in a few seconds. They check the geometry maths, wall and stair detection, door arcs, PDF reading, saving and loading, IFC round trips, clash detection, pipe sizing, electrical calculations, undo/redo, and more. Many tests use tricky drawings on purpose: plans hidden inside blocks, walls on oddly named layers, tables that look like walls, doors drawn as short lines.
 - **Overlay checks:** a developer tool draws everything BIMForge detected (walls in red, doors in green, stairs in purple) on top of the original PDF. Any difference from the drawing is visible at a glance:
 
   ```
@@ -419,7 +431,7 @@ The DWG reader is an example: it's a separate plug-in that uses an outside progr
 | **Walls drawn as a single thin line**, with no thickness or hatching | Not detected yet |
 | **Stair direction and height are guessed** (a plan doesn't show which end is up) | Check each stair in **Properties** |
 | **Curved walls** are imported as exact shapes, not editable walls | Edit them in the source program |
-| **Ducts (HVAC)** aren't converted from drawings yet | Planned |
+| **Duct fittings:** tapered transitions and fans aren't modelled, and curved elbows become square corners | Straight runs are placed correctly; add fittings by hand if needed |
 | **Plumbing and electrical tables are indicative** (IPC / IEC values) | Check against your local code before real design use |
 
 ---
@@ -463,6 +475,7 @@ src/bimforge/
 │   ├── walls.py        wall pairing, merging, corner joining, hatched walls (steps 5–6)
 │   ├── fills.py        filled walls and columns (step 5c)
 │   ├── openings.py     doors and windows (step 7)
+│   ├── ducts.py        HVAC ducts from outlines and labels (step 8b)
 │   └── rooms.py        rooms and slab (step 8)
 ├── geometry/       Turning objects into 3D shapes (step 10)
 ├── app/            Commands, undo/redo, events, saving (.bimx)
@@ -472,7 +485,7 @@ src/bimforge/
 ├── render/         The 3D viewer (VTK)
 ├── ui/             The windows, panels and tools you click on
 └── devtools/       Sample drawings and the overlay checking tool
-tests/              217 automated tests
+tests/              240 automated tests
 docs/               This guide and the technical design document (DESIGN.md)
 packaging/          Script that builds BIMForge.exe
 ```

@@ -59,6 +59,7 @@ DEFAULT_TESTS: tuple[ClashTest, ...] = (
     ClashTest("Electrical vs Structure", ("electrical",), ("structure",)),
     ClashTest("Plumbing vs Electrical", ("plumbing",), ("electrical",), clearance=0.1),
     ClashTest("MEP vs Mechanical", ("plumbing", "electrical"), ("mechanical",)),
+    ClashTest("Mechanical vs Structure", ("mechanical",), ("structure",)),
     # Off by default: every pipe through a wall is reported until sleeves are modelled.
     ClashTest("MEP vs Architecture", ("plumbing", "electrical", "mechanical"), ("architecture",), default=False),
 )

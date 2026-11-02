@@ -16,6 +16,7 @@ from bimforge.core.model import (
     CableCarrierSegment,
     Column,
     Door,
+    DuctSegment,
     Fixture,
     ImportedElement,
     Opening,
@@ -43,6 +44,10 @@ SYSTEM_TYPES = {  # IfcDistributionSystemEnum
     SystemType.POWER: "ELECTRICAL",
     SystemType.LIGHTING: "LIGHTING",
     SystemType.DATA: "DATA",
+    SystemType.SUPPLY_AIR: "VENTILATION",
+    SystemType.EXHAUST_AIR: "EXHAUST",
+    SystemType.FRESH_AIR: "VENTILATION",
+    SystemType.RETURN_AIR: "VENTILATION",
 }
 
 
@@ -167,7 +172,7 @@ class IfcExporter(Exporter):
         unsupported = len(project) - sum(
             len(project.elements_of(k))
             for k in (Wall, Opening, Slab, Space, ImportedElement, PipeSegment, CableCarrierSegment, Fixture, Stair,
-                      Column)
+                      Column, DuctSegment)
         )
         if unsupported:
             warnings.append(f"{unsupported} elements of types not yet mapped to IFC were skipped")
@@ -185,6 +190,7 @@ class IfcExporter(Exporter):
         members: dict[str, list] = defaultdict(list)
         elements = project.elements_of(PipeSegment) + project.elements_of(CableCarrierSegment)
         elements += project.elements_of(Fixture) + project.elements_of(Stair) + project.elements_of(Column)
+        elements += project.elements_of(DuctSegment)
         for element in elements:
             mesh = tessellator.mesh_for(element, project)
             if mesh is None or mesh.is_empty:
@@ -193,6 +199,8 @@ class IfcExporter(Exporter):
                 ifc_class, predefined = "IfcPipeSegment", "RIGIDSEGMENT"
             elif isinstance(element, CableCarrierSegment):
                 ifc_class, predefined = "IfcCableCarrierSegment", element.carrier_type
+            elif isinstance(element, DuctSegment):
+                ifc_class, predefined = "IfcDuctSegment", "RIGIDSEGMENT"
             elif isinstance(element, Stair):
                 ifc_class, predefined = "IfcStair", "STRAIGHT_RUN_STAIR"
             elif isinstance(element, Column):

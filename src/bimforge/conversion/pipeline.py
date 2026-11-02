@@ -20,12 +20,13 @@ from bimforge.conversion.openings import (
 )
 from bimforge.conversion.rooms import detect_rooms, footprint, ring
 from bimforge.conversion.settings import ConversionSettings
+from bimforge.conversion.ducts import AIR_SYSTEMS, detect_ducts, parse_labels
 from bimforge.conversion.fills import filled_elements
 from bimforge.conversion.stairs import detect_stairs
 from bimforge.conversion.walls import WallCandidate, hatch_walls, join_corners, merge_collinear, pair_wall_faces
-from bimforge.core.model import Column, Door, Element, Opening, Slab, Space, Stair, Storey, Wall, Window
+from bimforge.core.model import Column, DistributionSystem, Door, DuctSegment, Element, Opening, Slab, Space, Stair, Storey, Wall, Window
 from bimforge.core.units import LengthUnit, guess_unit_from_extent
-from bimforge.drawing.primitives import Arc, BlockRef, Drawing2D, Polyline, Segment
+from bimforge.drawing.primitives import Arc, BlockRef, Drawing2D, Polyline, Segment, Text
 from bimforge.geometry import vec2 as v
 from bimforge.geometry.spatial import segment_distances
 
@@ -113,6 +114,7 @@ class ConversionResult:
     proposals: list[Proposal]
     unit: LengthUnit
     warnings: list[str] = field(default_factory=list)
+    systems: list[DistributionSystem] = field(default_factory=list)  # systems the proposals refer to
 
     def accepted_elements(self) -> list[Element]:
         """Accepted elements, dropping openings whose host wall was rejected."""
@@ -177,9 +179,15 @@ class PlanConverter:
             columns = [x for x in columns if _within(x.position, box)]
         proposals += self._stair_proposals(stairs, storey)
         proposals += self._column_proposals(columns, storey)
+        duct_proposals, systems = self._duct_proposals(drawing, everything, walls, k, storey)
+        proposals += duct_proposals
+        top = max((p.element.path[0][2] + p.element.depth / 2 for p in duct_proposals), default=0.0)
+        if walls and top > s.wall_height:
+            warnings.append(f"Ducts reach {top:.2f} m but walls are {s.wall_height:g} m high, so they float above the "
+                            "walls. Set the real wall height in Edit > Conversion settings.")
         if not walls:
             warnings.append(self._no_walls_hint(drawing, unit))
-        return ConversionResult(proposals, unit, warnings)
+        return ConversionResult(proposals, unit, warnings, systems)
 
     # --- steps ---------------------------------------------------------------
 
@@ -265,6 +273,36 @@ class PlanConverter:
             out.append(Proposal(column, c.confidence, c.confidence >= self.settings.accept_threshold,
                                 note="filled rectangle"))
         return out
+
+    def _duct_proposals(self, drawing: Drawing2D, everything: list[Segment], walls: list[WallCandidate], k: float,
+                        storey: Storey) -> tuple[list[Proposal], list[DistributionSystem]]:
+        lines = [x for x in everything if not self._is_named_wall(x.layer)]
+        labels = parse_labels(drawing.of_type(Text), k)
+        duct_layers = sorted({x.layer for x in lines if classify_name(x.layer) is LayerRole.DUCT})
+        candidates = detect_ducts(lines, labels, self.settings, duct_layers)
+        if walls:  # legend swatches and key plans lie outside the building
+            xs = [c for w in walls for c in (w.start[0], w.end[0])]
+            ys = [c for w in walls for c in (w.start[1], w.end[1])]
+            box = (min(xs) - 1, min(ys) - 1, max(xs) + 1, max(ys) + 1)
+            candidates = [c for c in candidates if _within(((c.start[0] + c.end[0]) / 2, (c.start[1] + c.end[1]) / 2), box)]
+        systems: dict[str, DistributionSystem] = {}
+        out = []
+        for n, c in enumerate(candidates, start=1):
+            system = None
+            if c.kind in AIR_SYSTEMS:
+                system_type, name, colour = AIR_SYSTEMS[c.kind]
+                system = systems.setdefault(c.kind, DistributionSystem(name=name, system_type=system_type, color=colour))
+            z = round(c.bottom + c.depth / 2, 4)  # the path runs along the duct's centre
+            duct = DuctSegment(name=f"{c.kind or 'Duct'}-{n}", storey_id=storey.id, width=c.width, depth=c.depth,
+                               system_id=system.id if system else None,
+                               path=[(*_r(c.start), z), (*_r(c.end), z)])
+            source = "size from label" if c.labelled else "no matching label: size and level assumed"
+            note = f"{c.width * 1000:.0f} x {c.depth * 1000:.0f} mm, bottom {c.bottom * 1000:.0f} mm; {source}"
+            out.append(Proposal(duct, c.confidence, c.confidence >= self.settings.accept_threshold, note=note))
+        return out, list(systems.values())
+
+    def _is_named_wall(self, layer: str) -> bool:
+        return layer in self._wall_layers or classify_name(layer) is LayerRole.WALL
 
     def _block_sizes(self, drawing: Drawing2D, k: float) -> dict[str, float]:
         sizes: dict[str, float] = {}

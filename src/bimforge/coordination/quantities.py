@@ -12,6 +12,7 @@ from bimforge.core.model import (
     CableCarrierSegment,
     Column,
     Door,
+    DuctSegment,
     Element,
     Fixture,
     ImportedElement,
@@ -82,6 +83,13 @@ def take_off(project: Project) -> list[QuantityRow]:
         else:
             item = f"Cable tray {carrier.width * 1000:.0f} × {carrier.depth * 1000:.0f} mm"
         add("Electrical containment", item, carrier, "m", path_length(carrier.path))
+    for duct in project.elements_of(DuctSegment):
+        system = project.systems.get(duct.system_id) if duct.system_id else None
+        kind = system.name if system else "unassigned"
+        item = f"Duct {duct.width * 1000:.0f} x {duct.depth * 1000:.0f} mm, {kind}"
+        length = path_length(duct.path)
+        add("Ducts", f"{item} - length", duct, "m", length)
+        add("Ducts", f"{item} - sheet area", duct, "m²", 2 * (duct.width + duct.depth) * length)
     for fixture in project.elements_of(Fixture):
         family = family_of(fixture)
         category = "Plumbing fixtures" if family and family.discipline.value == "plumbing" else "Electrical fixtures"

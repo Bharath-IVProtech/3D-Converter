@@ -553,6 +553,30 @@ class SetIssues(Command):
         return ElementsChanged(issues=True)
 
 
+def commit_conversion(result, project: Project, label: str = "Commit converted plan") -> CompositeCommand:
+    """One undo step for a reviewed conversion: its elements, plus the systems they need.
+
+    A system the project already has (same name and type) is reused, so importing a
+    second plan adds to the existing supply-air system instead of creating another.
+    """
+    elements = result.accepted_elements()
+    used = {getattr(e, "system_id", None) for e in elements}
+    commands: list[Command] = []
+    for system in result.systems:
+        if system.id not in used:
+            continue
+        existing = next((s for s in project.systems.values()
+                         if s.name == system.name and s.system_type == system.system_type), None)
+        if existing is None:
+            commands.append(AddSystem(system))
+            continue
+        for element in elements:
+            if getattr(element, "system_id", None) == system.id:
+                element.system_id = existing.id  # type: ignore[attr-defined]
+    commands.append(AddElements(elements, label))
+    return CompositeCommand(commands, label)
+
+
 _UNSAVED = object()  # sentinel: history position that matches no saved state
 
 

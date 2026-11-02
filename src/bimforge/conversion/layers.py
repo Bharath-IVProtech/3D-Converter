@@ -17,6 +17,7 @@ class LayerRole(str, Enum):
     WINDOW = "window"
     ANNOTATION = "annotation"
     FURNITURE = "furniture"
+    DUCT = "duct"
     GRID = "grid"
     UNKNOWN = "unknown"
 
@@ -27,6 +28,7 @@ _RULES: list[tuple[LayerRole, re.Pattern[str]]] = [
     (LayerRole.WINDOW, re.compile(r"wind|glaz|fenster|fenetre|fenêtre|\bwin\b", re.I)),
     (LayerRole.WALL, re.compile(r"wall|wand|\bmur|a-wall|partition|masonry|brick", re.I)),
     (LayerRole.ANNOTATION, re.compile(r"dim|text|anno|note|tag|title|symb|hatch|defpoints", re.I)),
+    (LayerRole.DUCT, re.compile(r"duct|hvac", re.I)),
     (LayerRole.FURNITURE, re.compile(r"furn|fixt|equip|sanit|kitchen", re.I)),
     (LayerRole.GRID, re.compile(r"grid|axis|axes|centre|center", re.I)),
 ]

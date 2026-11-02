@@ -43,6 +43,7 @@ from bimforge.app.commands import (  # noqa: E402
     RemoveStorey,
     RemoveSystem,
     SetIssues,
+    commit_conversion,
 )
 from bimforge.app.events import ElementsChanged, EventBus  # noqa: E402
 from bimforge.adapters.dwg_importer import ODA_DOWNLOAD  # noqa: E402
@@ -53,6 +54,7 @@ from bimforge.core.model import (  # noqa: E402
     Column,
     DistributionSystem,
     Door,
+    DuctSegment,
     Element,
     Fixture,
     ImportedElement,
@@ -63,6 +65,7 @@ from bimforge.core.model import (  # noqa: E402
     Slab,
     Stair,
     Storey,
+    SystemType,
     Wall,
     Window,
 )
@@ -554,11 +557,12 @@ class MainWindow(QMainWindow):
     def commit_proposals(self) -> None:
         if self.result is None:
             return
-        elements = self.result.accepted_elements()
+        result = self.result
+        elements = result.accepted_elements()
         self.result = None
         self.review.populate([])
         self.view.clear(GHOST)
-        self.bus.execute(AddElements(elements, label="Commit converted plan"))
+        self.bus.execute(commit_conversion(result, self.project))
         self.statusBar().showMessage(f"Committed {len(elements)} elements. Ctrl+Z to undo.")
 
     def edit_settings(self) -> None:
@@ -720,8 +724,10 @@ class MainWindow(QMainWindow):
         system = self.project.systems.get(self.mep.current_system() or "")
         if system is None:
             return None
-        plumbing_system = system.system_type in plumbing.DRAINAGE_TYPES | plumbing.SUPPLY_TYPES
-        return system.id if plumbing_system == (discipline == "plumbing") else None
+        if system.system_type in plumbing.DRAINAGE_TYPES | plumbing.SUPPLY_TYPES:
+            return system.id if discipline == "plumbing" else None
+        electrical_types = electrical.CIRCUIT_TYPES | {SystemType.DATA}
+        return system.id if discipline == "electrical" and system.system_type in electrical_types else None
 
     def start_place(self, family_key: str, rotation: float) -> None:
         discipline = FAMILIES[family_key].discipline.value
@@ -967,7 +973,7 @@ class MainWindow(QMainWindow):
     def _style_for(self, element: Element) -> RenderStyle:
         if isinstance(element, ImportedElement):
             return CATEGORY_STYLES.get(element.category, CATEGORY_STYLES["architecture"])
-        if isinstance(element, (PipeSegment, CableCarrierSegment)):
+        if isinstance(element, (PipeSegment, CableCarrierSegment, DuctSegment)):
             system = self.project.systems.get(element.system_id) if element.system_id else None
             return RenderStyle(color=system.color if system else (0.6, 0.6, 0.6), category=element_category(element))
         if isinstance(element, Fixture):

@@ -30,6 +30,7 @@ from bimforge.core.model import (
     Column,
     DistributionSystem,
     Door,
+    DuctSegment,
     Element,
     Fixture,
     ImportedElement,
@@ -54,7 +55,7 @@ SCHEMA_VERSION = 2  # 2: issues table
 ELEMENT_TYPES: dict[str, type[Element]] = {
     cls.__name__: cls
     for cls in (Wall, Opening, Door, Window, Slab, Space, Stair, Column, PipeSegment, CableCarrierSegment, Fixture,
-                ImportedElement)
+                ImportedElement, DuctSegment)
 }
 
 

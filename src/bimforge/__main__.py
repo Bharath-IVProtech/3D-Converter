@@ -16,7 +16,7 @@ from bimforge import __version__
 
 
 def _convert(args: argparse.Namespace) -> int:
-    from bimforge.app.commands import AddElements, CommandBus
+    from bimforge.app.commands import CommandBus, commit_conversion
     from bimforge.app.events import EventBus
     from bimforge.app.persistence import FILE_EXTENSION, save_project
     from bimforge.conversion import ConversionSettings, PlanConverter
@@ -42,7 +42,7 @@ def _convert(args: argparse.Namespace) -> int:
         mark = "+" if p.accepted else "-"
         print(f"  {mark} {p.kind:<7} {p.element.name:<12} {p.confidence:5.0%}  {p.note}")
 
-    CommandBus(project, EventBus()).execute(AddElements(result.accepted_elements()))
+    CommandBus(project, EventBus()).execute(commit_conversion(result, project))
     if args.output.suffix.lower() == FILE_EXTENSION:
         save_project(project, args.output)
         warnings = []

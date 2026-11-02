@@ -29,6 +29,7 @@ class Discipline(str, Enum):
     STRUCTURE = "structure"
     PLUMBING = "plumbing"
     ELECTRICAL = "electrical"
+    MECHANICAL = "mechanical"
 
 
 @dataclass(kw_only=True)
@@ -205,6 +206,10 @@ class SystemType(str, Enum):
     POWER = "power"
     LIGHTING = "lighting"
     DATA = "data"
+    SUPPLY_AIR = "supply_air"
+    EXHAUST_AIR = "exhaust_air"
+    FRESH_AIR = "fresh_air"
+    RETURN_AIR = "return_air"
 
 
 @dataclass(kw_only=True)
@@ -241,6 +246,16 @@ class CableCarrierSegment(MepSegment):
     depth: float = 0.05
     ifc_class: ClassVar[str] = "IfcCableCarrierSegment"
     discipline: ClassVar[Discipline] = Discipline.ELECTRICAL
+
+
+@dataclass(kw_only=True)
+class DuctSegment(MepSegment):
+    """Rectangular HVAC duct. The path runs along the duct's centre (width across, depth vertical)."""
+
+    width: float = 0.3
+    depth: float = 0.3
+    ifc_class: ClassVar[str] = "IfcDuctSegment"
+    discipline: ClassVar[Discipline] = Discipline.MECHANICAL
 
 
 @dataclass(kw_only=True)
