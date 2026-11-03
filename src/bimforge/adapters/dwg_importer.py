@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from bimforge.adapters import drawing_cache
 from bimforge.adapters.dxf_importer import DxfImporter
 from bimforge.plugins.sdk import Importer, ImportResult, PluginInfo
 
@@ -59,14 +60,20 @@ class DwgImporter(Importer):
         path = Path(path)
         if not path.is_file():
             raise ValueError(f"File not found: {path}")
+        options = dict(options or {})
+        variant = f"explode={bool(options.get('explode_blocks', True))}"
+        cached = drawing_cache.load(path, variant)
+        if cached is not None:
+            return ImportResult(drawing=cached, warnings=list(cached.warnings))
         with tempfile.TemporaryDirectory(prefix="bimforge-dwg-") as tmp:
             dxf, tool = self._convert(path, Path(tmp))
-            result = DxfImporter().import_file(dxf, options)
+            result = DxfImporter().import_file(dxf, {**options, "trusted": True, "no_cache": True})
         assert result.drawing is not None
         result.drawing.source = str(path)
         note = f"DWG converted to DXF with {tool}"
         result.drawing.warnings.insert(0, note)
         result.warnings.insert(0, note)
+        drawing_cache.save(path, variant, result.drawing)
         return result
 
     def _convert(self, source: Path, out_dir: Path) -> tuple[Path, str]:

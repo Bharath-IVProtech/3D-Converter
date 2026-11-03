@@ -49,7 +49,13 @@ def classify_name(name: str) -> LayerRole:
     return LayerRole.UNKNOWN
 
 
+# "M_Door Tag" labels a door and "FHC Door" is a fire-hose cabinet's door; neither is a door in a wall.
+_NOT_AN_OPENING = re.compile(r"\btags?\b|_tag|\bschedule\b|\blegend\b|\bFHC\b|cabinet", re.I)
+
+
 def classify_block(block_name: str, layer: str) -> LayerRole:
     """Block name is more specific than layer name, so it wins when it is informative."""
+    if _NOT_AN_OPENING.search(block_name):
+        return LayerRole.UNKNOWN
     role = classify_name(block_name)
     return role if role is not LayerRole.UNKNOWN else classify_name(layer)

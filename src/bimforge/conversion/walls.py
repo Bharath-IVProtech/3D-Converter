@@ -18,7 +18,7 @@ from bimforge.conversion.settings import ConversionSettings
 from bimforge.core.model import Point2
 from bimforge.drawing.primitives import Segment
 from bimforge.geometry import vec2 as v
-from bimforge.geometry.spatial import GridIndex, bbox_of
+from bimforge.geometry.spatial import GridIndex, bbox_of, segment_distances
 
 LATERAL_TOLERANCE = 0.02
 THICKNESS_TOLERANCE = 0.01
@@ -296,11 +296,12 @@ def hatch_walls(
     grid = GridIndex(cell=2.0)
     for i, (x, y) in enumerate(pts):
         grid.insert(i, x, y, x, y)
+    wall_arrays = _wall_arrays(walls)
     max_t = settings.max_wall_thickness
     cos_lo, cos_hi = math.cos(math.radians(HATCH_ANGLE[1])), math.cos(math.radians(HATCH_ANGLE[0]))
     found: list[WallCandidate] = []
     for face in faces:
-        if face.length < 1.0 or _inside_wall(face, list(walls) + found):
+        if face.length < 1.0 or _inside_wall(face, wall_arrays, found):
             continue
         u = v.unit(v.sub(face.end, face.start))
         n = v.left_normal(u)
@@ -337,10 +338,20 @@ def hatch_walls(
     return found
 
 
-def _inside_wall(face: Segment, walls: Sequence[WallCandidate]) -> bool:
-    """Is this line one of the faces (or the inside) of a wall we already have?"""
+def _wall_arrays(walls: Sequence[WallCandidate]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    starts = np.array([w.start for w in walls], dtype=np.float64).reshape(-1, 2)
+    ends = np.array([w.end for w in walls], dtype=np.float64).reshape(-1, 2)
+    return starts, ends, np.array([w.thickness / 2 + 0.03 for w in walls], dtype=np.float64)
+
+
+def _inside_wall(face: Segment, arrays: tuple[np.ndarray, np.ndarray, np.ndarray], found: Sequence[WallCandidate]) -> bool:
+    """Is this line one of the faces (or the inside) of a wall we already have?
+
+    `arrays` holds the walls from before (compared all at once, as there can be thousands),
+    `found` the few added since.
+    """
     mid = ((face.start[0] + face.end[0]) / 2, (face.start[1] + face.end[1]) / 2)
-    for w in walls:
-        if v.point_segment_distance(mid, w.start, w.end) <= w.thickness / 2 + 0.03:
-            return True
-    return False
+    starts, ends, reach = arrays
+    if len(starts) and np.any(segment_distances(mid, starts, ends) <= reach):
+        return True
+    return any(v.point_segment_distance(mid, w.start, w.end) <= w.thickness / 2 + 0.03 for w in found)

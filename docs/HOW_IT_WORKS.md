@@ -242,6 +242,18 @@ the two pieces are **joined into one wall**, and the door or window is placed in
 
 Once the walls are known, BIMForge traces their centre lines like a map and finds every **closed area** of at least 1 m². Each one becomes a **room**, with its area calculated. The **floor slab** is the outline of all the rooms together, grown out to the outer face of the walls.
 
+### Step 8a – Using the names on the drawing
+
+If the drawing says "ANOXIC TANK", the model should say it too, instead of "Room 5". This takes some care, because a PDF stores text as separate words, and a room also holds dimensions and duct notes.
+
+1. **Group words into blocks**, as a reader sees them: words of the same size and angle that sit close together on a line or on the next line. So "Treated", "Water", "Tank", "30" and "KL" become one label, and a "Rungs" note further up the same room stays separate.
+2. **Judge each block.** Sizes (425x300), levels (B.O.D 4300), bare numbers, equipment notes (LOUVER, FAN, DUCT) and long sentences aren't names.
+3. **Match it to an element.** A room takes the label inside it, with the largest text winning. A door takes a tag like D1 within 1.5 m, and so on. Ducts take their size label, and the project and level come from the title block.
+
+If nothing fits, the element keeps a plain number. A plain number is better than a wrong name, and you can see every name in the review list.
+
+Text can also be turned sideways on the page. The PDF reader corrects its direction, so "YAWKLAW" reads as WALKWAY and a dimension "082" reads as 280.
+
 ### Step 8b – HVAC ducts
 
 A duct is drawn as two parallel outline lines the duct's width apart, usually in a discipline colour, with a label such as **"800x300 EA"** and **"B.O.D 4150"** (bottom of duct, 4150 mm above the level). BIMForge uses the labels as its main evidence:
@@ -299,6 +311,26 @@ Every change, whether you make it, a tool makes it, or a detection makes it, is 
 - Before a command is accepted, the model is **checked**. For example, a window can't be taller than its wall, two doors can't overlap, and a wall can't be shortened past its window. If the check fails, nothing changes and you're told why.
 - When you **move a wall**, walls joined to it stretch to stay connected, and their doors stay where they were in the room.
 
+### Drawing and changing the model yourself
+
+You don't need a drawing to start. The **Model** tab has tools for walls, doors, windows, columns, slabs and straight stairs, and **Detect rooms** makes a room inside every closed loop of walls.
+
+- **Snapping** means a click lands somewhere exact. BIMForge tries a wall's end first, then its middle, then a straight line from your last point if Shift is held, then a point along a wall, and finally a 50 mm grid. A small marker shows which one it found.
+- **Rotate, mirror, copy and array** act on the whole selection as one undo step. A door stays in its wall, because it is stored as a distance along that wall, so turning the wall turns the door too. Copying a wall brings its doors and windows.
+- A drawn element goes through the same checks as an edit. A second door placed on top of the first is refused with a message.
+
+### Seeing the model
+
+**Big drawings read quickly.** A CAD file often repeats the same block hundreds of times: one light fitting can be 800 lines. BIMForge reads each block once and then calculates where each copy goes, instead of copying every object for every placement. It also remembers big drawings it has read, so importing an unchanged file again skips the reading.
+
+**The view keeps the drawing in reach.** Fit looks at the model's actual corners, so a long plan uses the full width of the window. A few stray objects far away don't count towards the fit. Scrolling zooms towards the cursor, and panning and zooming have limits, so part of the model always stays on screen.
+
+**Big drawings stay smooth.** Elements that look alike are drawn together as one object, so a building with thousands of walls orbits as easily as a small one. A click is answered by testing the line of sight against the triangles themselves. The 2D underlay shows at most 150,000 lines on very large drawings, dropping the tiniest first; this is display only, and detection still reads every line.
+
+- **Display styles:** shaded, shaded with edges, hidden line, wireframe and X-ray. Edges are the lines a person would draw, the sharp folds, rather than every triangle of the mesh.
+- **Rooms** appear as a pale tinted floor with their name and area.
+- **Hide and isolate** only change what you see. Nothing is removed from the model, and these aren't undo steps.
+
 ### Levels (storeys)
 
 A building can have many levels. Each level has a name, an elevation and a height. Everything on a level is placed relative to it, so **changing a level's elevation moves everything on it**. **Duplicate level** copies a typical floor up in one click.
@@ -310,6 +342,12 @@ Projects are saved as one **`.bimx`** file (a small database inside).
 - **Safe saving:** the file is written to a temporary copy first, then swapped in. If the computer crashes mid-save, your previous file is untouched.
 - **Autosave:** every 2 minutes, to a separate file. After a crash, BIMForge offers to recover your work.
 - **Unsaved changes** are shown by an asterisk ( * ) in the window title.
+
+### Schedules and drawing sheets
+
+A **schedule** is a table of one kind of element, such as all the doors with their sizes. BIMForge builds them from the model, so they always match it. Clicking a row selects that element.
+
+**PDF sheets** draws the model back as 2D drawings on A3 pages, one floor plan per level plus the schedules. Walls are cut where the openings are, doors get a swing arc, and stairs get treads and an arrow. The scale is the largest standard one (1:50, 1:100 and so on) at which the plan fits.
 
 ---
 
@@ -418,7 +456,7 @@ The DWG reader is an example: it's a separate plug-in that uses an outside progr
 
 ## 10. How we know it works
 
-- **270 automated tests** run in a few seconds. They check the geometry maths, wall and stair detection, door arcs, PDF reading, saving and loading, IFC round trips, clash detection, pipe sizing, electrical calculations, undo/redo, and more. Many tests use tricky drawings on purpose: plans hidden inside blocks, walls on oddly named layers, tables that look like walls, doors drawn as short lines.
+- **397 automated tests** run in a few seconds. They check the geometry maths, wall and stair detection, door arcs, PDF reading, saving and loading, IFC round trips, clash detection, pipe sizing, electrical calculations, undo/redo, and more. Many tests use tricky drawings on purpose: plans hidden inside blocks, walls on oddly named layers, tables that look like walls, doors drawn as short lines.
 - **Overlay checks:** a developer tool draws everything BIMForge detected (walls in red, doors in green, stairs in purple) on top of the original PDF. Any difference from the drawing is visible at a glance:
 
   ```
@@ -443,6 +481,12 @@ The DWG reader is an example: it's a separate plug-in that uses an outside progr
 | **Duct fittings:** fans aren't modelled, a transition beside a fan runs through the fan's space, and curved elbows become square corners | Straight runs and reducers are placed correctly; add the rest by hand if needed |
 | **Stacked openings:** a wall can't have one opening above another, so a louvre above a door is skipped | Add it after the import, or check the review list |
 | **Louvre height** is taken from the ducts' usual level, because the note gives no sill | Check each one in **Properties** |
+| **Not in the modelling tools yet:** roofs, curtain walls, curved walls, editing a wall by dragging it, trimming walls to meet, and multi-flight stairs drawn by hand | Multi-flight stairs can come from a drawing. A wall's ends can be typed in **Properties**. Model the rest in another program and import the IFC |
+| **Plan sheets show overall dimensions only**, and every level goes on A3. There is no way yet to arrange or annotate sheets by hand. | Export IFC to your CAD or BIM program for full construction drawings |
+| **A name is only found if its label is inside a detected room.** A space whose walls don't close gets no room, so its label goes unused: on the sample sheet, EQALIZATION TANK and WALKWAY | Close the walls and use **Detect rooms**, which also reads the drawing's labels, or type the name in **Properties** |
+| **A label that has no tank or room words of its own**, or a note not in the exclusion list, could be taken as a room's name | Check names in **Detection review** |
+| **Very large drawings still take a minute or two the first time** (a 25 MB DWG with 880,000 objects took 96 s), and ellipses, splines and regions aren't read at all | The progress window shows the time so far, and importing the same file again is faster. Check the import notes for what was skipped |
+| **Detection can produce overlapping walls** on detailed drawings, sometimes exactly on top of each other, and room areas can differ from the area written on the plan | Review the wall list, and trust the written area until you've checked the outline |
 | **Plumbing and electrical tables are indicative** (IPC / IEC values) | Check against your local code before real design use |
 
 ---

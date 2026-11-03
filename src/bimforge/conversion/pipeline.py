@@ -8,6 +8,18 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from bimforge.conversion.labels import (
+    TextBlock,
+    column_tag,
+    door_tag,
+    group_text,
+    level_from_title,
+    louvre_note,
+    project_title,
+    room_name,
+    stair_name,
+    window_tag,
+)
 from bimforge.conversion.layers import WALL_LAYER_SCORE, LayerRole, classify_name
 from bimforge.conversion.openings import (
     OpeningCandidate,
@@ -38,6 +50,7 @@ from bimforge.geometry import vec2 as v
 from bimforge.geometry.spatial import segment_distances
 
 HOST_TOLERANCE = 0.05
+NOTE_EXAMPLES = 3  # how many example names a note gives
 AUTO_LAYER_MIN_LAYERS = 5  # only guess the wall layer when there are many unnamed layers
 AUTO_LAYER_CANDIDATES = 12
 COORD_DECIMALS = 6  # micrometre rounding removes float noise such as 8e-17
@@ -97,6 +110,29 @@ def _connectedness(walls: list[WallCandidate]) -> float:
     return joined / (2 * len(walls))
 
 
+def _unplaced_notes(symbols: list) -> list[str]:
+    """One note per kind of symbol, so a big drawing doesn't produce hundreds of lines."""
+    notes = []
+    for kind in sorted({s.kind for s in symbols}):
+        names = Counter(s.name.split("$")[-1] for s in symbols if s.kind == kind)
+        examples = ", ".join(f"'{name}'" for name, _ in names.most_common(NOTE_EXAMPLES))
+        more = len(names) - NOTE_EXAMPLES
+        notes.append(f"{sum(names.values())} {kind} symbols are not in any wall, so they were left out: {examples}"
+                     + (f" and {more} other kinds" if more > 0 else ""))
+    return notes
+
+
+def _duct_name(c, n: int) -> str:
+    """The size label as drawn ("425x300 EA"); a run nobody labelled keeps a plain number."""
+    if not c.labelled:
+        return f"{c.kind or 'Duct'}-{n}"
+    mm = lambda metres: f"{metres * 1000:.0f}"  # noqa: E731
+    size = f"{mm(c.width)}x{mm(c.depth)}"
+    if c.end_width:
+        size += f" to {mm(c.end_width)}x{mm(c.depth)}"
+    return f"{size} {c.kind}".strip()
+
+
 def _r(point):
     return (round(point[0], COORD_DECIMALS) + 0.0, round(point[1], COORD_DECIMALS) + 0.0)
 
@@ -122,6 +158,9 @@ class ConversionResult:
     unit: LengthUnit
     warnings: list[str] = field(default_factory=list)
     systems: list[DistributionSystem] = field(default_factory=list)  # systems the proposals refer to
+    labels: list[TextBlock] = field(default_factory=list)  # the drawing's text, grouped into blocks
+    project_name: str | None = None  # from the title block
+    level_name: str | None = None  # from the plan's title
 
     def accepted_elements(self) -> list[Element]:
         """Accepted elements, dropping openings whose host wall was rejected."""
@@ -172,13 +211,13 @@ class PlanConverter:
         lines = [(seg.start, seg.end) for seg in segments]
         walls, windows = find_infill_windows(walls, lines, symbols, s)
         walls, openings, unplaced = place_openings(walls, symbols + windows, s)
-        for symbol in unplaced:
-            warnings.append(f"{symbol.kind.title()} symbol '{symbol.name}' ({symbol.handle}) is not in any wall")
+        warnings += _unplaced_notes(unplaced)
 
         notes = [((t.position[0] * k, t.position[1] * k), t.text) for t in drawing.of_type(Text)]
         stairs = link_flights(stairs, walls, notes)
         orient_by_notes(stairs, notes)
         walls = walls_clear_of_stairs(walls, stairs)
+        self._labels = group_text(drawing.of_type(Text), k)
 
         proposals = self._wall_proposals(walls, storey)
         proposals += self._opening_proposals(openings, proposals, storey, warnings)
@@ -200,7 +239,8 @@ class PlanConverter:
                             "walls. Set the real wall height in Edit > Conversion settings.")
         if not walls:
             warnings.append(self._no_walls_hint(drawing, unit))
-        return ConversionResult(proposals, unit, warnings, systems)
+        return ConversionResult(proposals, unit, warnings, systems, self._labels, project_title(self._labels),
+                                level_from_title(self._labels))
 
     # --- steps ---------------------------------------------------------------
 
@@ -273,7 +313,8 @@ class PlanConverter:
             total = c.risers + sum(f[3] for f in c.further)
             # Risers of ~170 mm, but never taller than the level.
             height = round(min(self.settings.wall_height, total * 0.17), 3)
-            stair = Stair(name=f"Stair {n}", storey_id=storey.id, start=_r(c.start), end=_r(c.end),
+            name = stair_name(c.centre, self._labels) or f"Stair {n}"
+            stair = Stair(name=name, storey_id=storey.id, start=_r(c.start), end=_r(c.end),
                           width=round(c.width, 3), risers=c.risers, height=height,
                           further_flights=[(*_r(a), *_r(b), round(w, 3), r) for a, b, w, r in c.further])
             shape = f"{len(c.further) + 1} flights with landing" + ("s" if len(c.further) > 1 else "") + ", " if c.further else ""
@@ -285,7 +326,7 @@ class PlanConverter:
     def _column_proposals(self, columns: list, storey: Storey) -> list[Proposal]:
         out = []
         for n, c in enumerate(columns, start=1):
-            column = Column(name=f"C{n}", storey_id=storey.id, position=_r(c.position), width=round(c.width, 3),
+            column = Column(name=column_tag(c.position, self._labels) or f"C{n}", storey_id=storey.id, position=_r(c.position), width=round(c.width, 3),
                             depth=round(c.depth, 3), rotation=round(c.rotation, 2), height=self.settings.wall_height)
             out.append(Proposal(column, c.confidence, c.confidence >= self.settings.accept_threshold,
                                 note="filled rectangle"))
@@ -310,7 +351,7 @@ class PlanConverter:
                 system_type, name, colour = AIR_SYSTEMS[c.kind]
                 system = systems.setdefault(c.kind, DistributionSystem(name=name, system_type=system_type, color=colour))
             z = round(c.bottom + c.depth / 2, 4)  # the path runs along the duct's centre
-            duct = DuctSegment(name=f"{c.kind or 'Duct'}-{n}", storey_id=storey.id, width=c.width, depth=c.depth,
+            duct = DuctSegment(name=_duct_name(c, n), storey_id=storey.id, width=c.width, depth=c.depth,
                                system_id=system.id if system else None, end_width=c.end_width,
                                path=[(*_r(c.start), z), (*_r(c.end), z)])
             source = "size from label" if c.labelled else "no matching label: size and level assumed"
@@ -339,6 +380,8 @@ class PlanConverter:
             opening = Opening(name=f"{hole.kind} opening {n}", storey_id=storey.id, host_id=host.element.id,
                               offset=hole.offset, width=hole.width, height=hole.height, sill_height=hole.sill)
             span = opening.span
+            if hole.kind == "Louvre" and 0 <= hole.offset <= host.element.length:
+                opening.name = louvre_note(host.element.point_at(hole.offset), self._labels) or opening.name
             if span[0] < 0 or span[1] > host.element.length or opening.sill_height + opening.height > host.element.height:
                 continue
             # The wall builder cannot stack openings, so any overlap along the wall conflicts.
@@ -452,6 +495,7 @@ class PlanConverter:
     ) -> list[Proposal]:
         s = self.settings
         out: list[Proposal] = []
+        skipped: Counter[str] = Counter()
         for c in sorted(openings, key=lambda o: -o.confidence):
             host = self._find_host(c.center, wall_proposals)
             if host is None:
@@ -471,16 +515,22 @@ class PlanConverter:
                 el = Window(host_id=wall.id, offset=offset, width=width, height=height, sill_height=s.window_sill_height)
             el.storey_id = storey.id
             if any(self._overlaps(el, p.element) for p in out):
-                warnings.append(f"{c.kind.title()} {c.handle} overlaps another opening; skipped")
+                skipped[c.kind] += 1
                 continue
             confidence = min(c.confidence, host.confidence)
             note = "placed in wall gap" if c.in_gap else "placed from symbol position"
             out.append(Proposal(el, confidence, confidence >= s.accept_threshold, (c.handle,), note))
 
+        for kind, count in skipped.items():
+            warnings.append(f"{count} {kind} symbols overlap another opening in the same wall, so they were left out")
+        hosts = {w.element.id: w.element for w in wall_proposals}
         counters: Counter[str] = Counter()
         for p in out:
             counters[p.kind] += 1
-            p.element.name = f"{p.kind} {counters[p.kind]}"
+            wall = hosts[p.element.host_id]
+            at = wall.point_at(p.element.offset)
+            tag = door_tag(at, self._labels) if isinstance(p.element, Door) else window_tag(at, self._labels)
+            p.element.name = tag or f"{p.kind} {counters[p.kind]}"
         return out
 
     @staticmethod
@@ -509,7 +559,8 @@ class PlanConverter:
         derived = min(0.8, sum(w.confidence for w in walls) / len(walls))
         out = [
             Proposal(
-                Space(name=f"Room {n}", storey_id=storey.id, boundary=[_r(p) for p in ring(poly)], height=s.wall_height),
+                Space(name=room_name(poly, self._labels) or f"Room {n}", storey_id=storey.id,
+                      boundary=[_r(p) for p in ring(poly)], height=s.wall_height),
                 derived,
                 derived >= s.accept_threshold,
                 note=f"{poly.area:.2f} m2 (centreline area)",

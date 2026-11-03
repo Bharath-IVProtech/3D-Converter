@@ -128,15 +128,21 @@ def _host_in_wall(
     symbol: OpeningSymbol, walls: Sequence[WallCandidate], settings: ConversionSettings
 ) -> OpeningCandidate | None:
     best: tuple[float, Point2] | None = None
-    for wall in walls:
-        u = wall.direction
-        n = v.left_normal(u)
-        for anchor in reversed(symbol.anchors):  # prefer the symbol centre
-            t = v.dot(v.sub(anchor, wall.start), u)
-            lateral = abs(v.dot(v.sub(anchor, wall.start), n))
-            if 0 <= t <= wall.length and lateral <= wall.thickness / 2 + SYMBOL_REACH:
-                if best is None or lateral < best[0]:
-                    best = (lateral, v.add(wall.start, v.scale(u, t)))
+    # All walls at once: this runs for every unplaced symbol, and big plans have thousands of walls.
+    starts = np.array([w.start for w in walls], dtype=np.float64).reshape(-1, 2)
+    directions = np.array([w.direction for w in walls], dtype=np.float64).reshape(-1, 2)
+    lengths = np.array([w.length for w in walls], dtype=np.float64)
+    reach = np.array([w.thickness / 2 + SYMBOL_REACH for w in walls], dtype=np.float64)
+    for anchor in reversed(symbol.anchors):  # prefer the symbol centre
+        offset = np.asarray(anchor, dtype=np.float64) - starts
+        t = offset[:, 0] * directions[:, 0] + offset[:, 1] * directions[:, 1]
+        lateral = np.abs(-offset[:, 0] * directions[:, 1] + offset[:, 1] * directions[:, 0])
+        fits = np.flatnonzero((t >= 0) & (t <= lengths) & (lateral <= reach))
+        if len(fits):
+            i = fits[np.argmin(lateral[fits])]
+            if best is None or lateral[i] < best[0]:
+                best = (float(lateral[i]), (float(starts[i, 0] + directions[i, 0] * t[i]),
+                                            float(starts[i, 1] + directions[i, 1] * t[i])))
     if best is None:
         return None
     default = settings.default_door_width if symbol.kind == "door" else settings.default_window_width
@@ -197,6 +203,16 @@ def find_infill_windows(
     taken = [a for s in symbols for a in s.anchors]
     consumed: set[int] = set()
     found: list[OpeningSymbol] = []
+    # Boxes around every wall and line: only what lies within a gap's own box can be its glazing.
+    wall_boxes = np.array([(*w.start, *w.end) for w in walls], dtype=np.float64).reshape(-1, 4)
+    usable_lines = [ln for ln in lines if math.dist(*ln) >= 0.2]
+    line_boxes = np.array([(*p, *q) for p, q in usable_lines], dtype=np.float64).reshape(-1, 4)
+
+    def within(boxes: np.ndarray, x0: float, y0: float, x1: float, y1: float, margin: float) -> np.ndarray:
+        xs, ys = boxes[:, [0, 2]], boxes[:, [1, 3]]
+        return np.flatnonzero((xs.min(axis=1) >= x0 - margin) & (xs.max(axis=1) <= x1 + margin)
+                              & (ys.min(axis=1) >= y0 - margin) & (ys.max(axis=1) <= y1 + margin))
+
     for group in _line_groups(walls, settings):
         ux, uy = walls[group[0]].direction
         along = sorted(group, key=lambda i: min(ux * p[0] + uy * p[1] for p in (walls[i].start, walls[i].end)))
@@ -224,9 +240,11 @@ def find_infill_windows(
                     return 0.0  # runs past the gap: a wall or other line, not glazing in this opening
                 return max(0.0, min(gap, t[1]) - max(0.0, t[0])) / gap
 
-            thin = [i for i, w in enumerate(walls)
-                    if w.thickness < host.thickness - 0.005 and spans(w.start, w.end) >= INFILL_COVERAGE]
-            glazed = thin or [ln for ln in lines if math.dist(*ln) >= 0.2 and spans(*ln) >= INFILL_COVERAGE]
+            box = (min(g0[0], g1[0]), min(g0[1], g1[1]), max(g0[0], g1[0]), max(g0[1], g1[1]),
+                   band + INFILL_OVERHANG + 1e-6)
+            thin = [int(i) for i in within(wall_boxes, *box)
+                    if walls[i].thickness < host.thickness - 0.005 and spans(walls[i].start, walls[i].end) >= INFILL_COVERAGE]
+            glazed = thin or [usable_lines[i] for i in within(line_boxes, *box) if spans(*usable_lines[i]) >= INFILL_COVERAGE]
             if not glazed:
                 continue
             consumed.update(thin)

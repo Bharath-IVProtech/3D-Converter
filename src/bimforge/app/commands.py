@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
@@ -56,9 +57,10 @@ def _combine(changes: Iterable[ElementsChanged]) -> ElementsChanged:
 
 
 class AddElements(Command):
-    def __init__(self, elements: Iterable[Element], label: str = "Add elements") -> None:
+    def __init__(self, elements: Iterable[Element], label: str = "Add elements", validate: bool = False) -> None:
         self.elements = list(elements)
         self.label = label
+        self.validate = validate  # for what a person draws; detection output is already filtered
 
     def apply(self, project: Project) -> ElementsChanged:
         added: list[str] = []
@@ -66,6 +68,10 @@ class AddElements(Command):
             for element in self.elements:
                 project.add(element)
                 added.append(element.id)
+            if self.validate:
+                errors = [err for e in self.elements for err in validate_with_dependents(e, project)]
+                if errors:
+                    raise ValidationError("; ".join(dict.fromkeys(errors)))
         except Exception:
             for element_id in added:  # keep the command atomic
                 project.remove(element_id)
@@ -203,6 +209,152 @@ def flipped_stair(stair: Stair) -> dict[str, object]:
         "start": first[0], "end": first[1], "width": first[2], "risers": first[3],
         "further_flights": [(*a, *b, width, risers) for a, b, width, risers in rest],
     }
+
+
+# --- Rotate, mirror, copy, array --------------------------------------------------------
+
+Affine2D = tuple[float, float, float, float, float, float]  # x' = a x + b y + c, y' = d x + e y + f
+
+
+def rotation_about(centre: tuple[float, float], degrees: float) -> Affine2D:
+    c, s = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+    cx, cy = centre
+    return (c, -s, cx - c * cx + s * cy, s, c, cy - s * cx - c * cy)
+
+
+def mirror_across(centre: tuple[float, float], axis: str) -> Affine2D:
+    """Mirror across the vertical ("x": left becomes right) or horizontal ("y") line through centre."""
+    cx, cy = centre
+    return (-1.0, 0.0, 2 * cx, 0.0, 1.0, 0.0) if axis == "x" else (1.0, 0.0, 0.0, 0.0, -1.0, 2 * cy)
+
+
+def transform_changes(element: Element, m: Affine2D) -> dict[str, object]:
+    """Field changes that apply a plan transform. Openings travel with their host wall."""
+    a, b, c, d, e, f = m
+
+    def pt(p):
+        x, y = p[0], p[1]
+        return (a * x + b * y + c, d * x + e * y + f, *p[2:])
+
+    def angle(degrees: float) -> float:
+        x, y = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+        return math.degrees(math.atan2(d * x + e * y, a * x + b * y))
+
+    if isinstance(element, Stair):
+        return {"start": pt(element.start), "end": pt(element.end),
+                "further_flights": [(*pt((x0, y0)), *pt((x1, y1)), w, r)
+                                    for x0, y0, x1, y1, w, r in element.further_flights]}
+    if isinstance(element, Wall):
+        return {"start": pt(element.start), "end": pt(element.end)}
+    if isinstance(element, Column):
+        return {"position": pt(element.position), "rotation": angle(element.rotation)}
+    if isinstance(element, (Slab, Space)):
+        return {"boundary": [pt(p) for p in element.boundary]}
+    if isinstance(element, MepSegment):
+        return {"path": [pt(p) for p in element.path]}
+    if isinstance(element, Fixture):
+        return {"position": pt(element.position), "rotation": angle(element.rotation)}
+    if isinstance(element, ImportedElement):
+        changes: dict[str, object] = {"vertices": [pt(p) for p in element.vertices]}
+        if a * e - b * d < 0:  # a mirror turns triangles inside out
+            changes["faces"] = [(i, k, j) for i, j, k in element.faces]
+        return changes
+    return {}
+
+
+class TransformElements(Command):
+    """Rotate or mirror elements in plan as one undo step; openings go with their walls."""
+
+    def __init__(self, element_ids: Iterable[str], matrix: Affine2D, label: str = "Transform") -> None:
+        self.element_ids = list(element_ids)
+        self.matrix = matrix
+        self.label = label
+        self._inner: CompositeCommand | None = None
+
+    def apply(self, project: Project) -> ElementsChanged:
+        first_run = self._inner is None
+        if self._inner is None:
+            commands = []
+            for element_id in self.element_ids:
+                element = project.get(element_id)
+                changes = transform_changes(element, self.matrix) if element is not None else {}
+                if changes:
+                    commands.append(ModifyElement(element_id, changes, validate=False))
+            self._inner = CompositeCommand(commands, self.label)
+        change = self._inner.apply(project)
+        if first_run:
+            errors = [err for i in change.modified if (e := project.get(i)) for err in validate_with_dependents(e, project)]
+            if errors:
+                self._inner.revert(project)
+                self._inner = None
+                raise ValidationError("; ".join(dict.fromkeys(errors)))
+        hosted = [o.id for i in change.modified for o in project.hosted_openings(i)]
+        return _combine([change, ElementsChanged(modified=tuple(hosted))])
+
+    def revert(self, project: Project) -> ElementsChanged:
+        assert self._inner is not None
+        change = self._inner.revert(project)
+        hosted = [o.id for i in change.modified for o in project.hosted_openings(i)]
+        return _combine([change, ElementsChanged(modified=tuple(hosted))])
+
+
+def _copy_name(name: str, taken: set[str]) -> str:
+    """"W-3" -> "W-3 (2)", then "W-3 (3)"... so schedules can tell the copies apart."""
+    base = re.sub(r" \(\d+\)$", "", name)
+    n = 2
+    while f"{base} ({n})" in taken:
+        n += 1
+    taken.add(f"{base} ({n})")
+    return f"{base} ({n})"
+
+
+def _copy_at(sources: Sequence[Element], dx: float, dy: float, taken: set[str]) -> list[Element]:
+    """Copies moved by (dx, dy), with fresh ids; a copied wall keeps its copied openings."""
+    ids = {e.id: new_id() for e in sources}
+    copies: list[Element] = []
+    for element in sources:
+        if isinstance(element, Opening) and element.host_id not in ids:
+            continue  # an opening alone has nowhere to go
+        copy = deepcopy(element)
+        copy.id = ids[element.id]
+        copy.properties = {k: v_ for k, v_ in copy.properties.items() if k not in ("ifc_guid", "ifc_void_guid")}
+        if copy.name:
+            copy.name = _copy_name(copy.name, taken)
+        if isinstance(copy, Opening):
+            copy.host_id = ids[element.host_id]
+        else:
+            for name, value in _translated(copy, dx, dy).items():
+                setattr(copy, name, value)
+        copies.append(copy)
+    return copies
+
+
+def _translated(element: Element, dx: float, dy: float) -> dict[str, object]:
+    return transform_changes(element, (1.0, 0.0, dx, 0.0, 1.0, dy))
+
+
+class CopyElements(Command):
+    """Copy elements once per offset: one offset is a copy, several are an array. One undo step."""
+
+    def __init__(self, element_ids: Iterable[str], offsets: Sequence[tuple[float, float]], label: str = "Copy") -> None:
+        self.element_ids = list(element_ids)
+        self.offsets = list(offsets)
+        self.label = label
+        self.created: list[Element] = []
+
+    def apply(self, project: Project) -> ElementsChanged:
+        if not self.created:
+            sources = [e for i in self.element_ids if (e := project.get(i)) is not None]
+            chosen = {e.id for e in sources}
+            sources += [o for w in sources if isinstance(w, Wall) for o in project.hosted_openings(w.id)
+                        if o.id not in chosen]
+            taken = {e.name for e in project.elements()}
+            for dx, dy in self.offsets:
+                self.created += _copy_at(sources, dx, dy, taken)
+        return AddElements(self.created, self.label).apply(project)
+
+    def revert(self, project: Project) -> ElementsChanged:
+        return AddElements(self.created, self.label).revert(project)
 
 
 JOIN_TOLERANCE = 0.01

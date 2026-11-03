@@ -210,9 +210,15 @@ class PdfImporter(Importer):
             if _structural_fill(curve) and len(curve.get("pts") or []) >= 3:
                 out.append(Polyline(points=tuple(model(x, y) for x, y in curve["pts"]), closed=True, filled=True,
                                     layer=f"fill {colour_name(curve.get('non_stroking_color'))}"))
-        for word in page.extract_words():
-            out.append(Text(position=model(word["x0"], word["bottom"]), text=word["text"],
-                            height=(word["bottom"] - word["top"]) * k, layer="Text"))
+        for word in page.extract_words(extra_attrs=["upright"], return_chars=True):
+            text, rotation, size = word["text"], 0.0, word["bottom"] - word["top"]
+            if not word["upright"]:
+                # Sideways words come back sorted top to bottom, so text running up the page reads backwards.
+                upward = word["chars"][0]["matrix"][1] > 0
+                text, rotation = (text[::-1], 90.0) if upward else (text, -90.0)
+                size = word["x1"] - word["x0"]
+            out.append(Text(position=model(word["x0"], word["bottom"]), text=text, height=size * k, rotation=rotation,
+                            layer="Text"))
 
         if not weights and not arcs:
             if page.images:

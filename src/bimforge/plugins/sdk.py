@@ -106,7 +106,10 @@ class RenderStyle:
     color: tuple[float, float, float] = (0.8, 0.8, 0.8)
     opacity: float = 1.0
     category: str = "architecture"  # used for discipline visibility filters
-    show_edges: bool = False
+
+
+DISPLAY_STYLES = {"shaded": "Shaded", "edges": "Shaded with edges", "hidden": "Hidden line",
+                  "wireframe": "Wireframe", "xray": "X-ray"}
 
 
 class RenderBackend(Plugin):
@@ -154,6 +157,21 @@ class RenderBackend(Plugin):
 
     @abstractmethod
     def zoom_to(self, bounds: tuple[float, float, float, float, float, float]) -> None: ...
+
+    # Optional presentation features: a backend without them simply ignores the request.
+
+    def set_display_style(self, style: str) -> None:
+        """One of DISPLAY_STYLES."""
+
+    def set_orthographic(self, enabled: bool) -> None: ...
+
+    def set_grid(self, minor: np.ndarray | None, major: np.ndarray | None = None) -> None:
+        """Ground grid lines as (N, 2, 3) arrays, not part of the model; None removes them."""
+
+    def set_background(self, top: tuple[float, float, float], bottom: tuple[float, float, float]) -> None: ...
+
+    def save_image(self, path: Path) -> None:
+        raise NotImplementedError
 
     @abstractmethod
     def fit_view(self) -> None: ...

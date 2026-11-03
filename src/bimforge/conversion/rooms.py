@@ -35,3 +35,30 @@ def footprint(rooms: Sequence[Polygon], walls: Sequence[WallCandidate]) -> list[
 
 def ring(polygon: Polygon) -> list[Point2]:
     return [(float(x), float(y)) for x, y in list(polygon.exterior.coords)[:-1]]
+
+
+def rooms_from_walls(walls: Sequence, existing: Sequence, min_area: float, height: float, storey_id: str | None,
+                     used_names: Sequence[str] = (), labels: Sequence = ()) -> list:
+    """Room elements for every closed wall loop that has no room yet (centre-line outlines).
+
+    A room takes the label written inside it on the drawing, else the next unused "Room n".
+    """
+    from bimforge.conversion.labels import room_name
+    from bimforge.core.model import Space
+
+    taken = [Polygon(s.boundary) for s in existing if len(s.boundary) >= 3]
+    names = set(used_names)
+    number = 0
+    rooms = []
+    for polygon in detect_rooms(walls, min_area):
+        point = polygon.representative_point()
+        if any(t.is_valid and t.contains(point) for t in taken):
+            continue
+        name = room_name(polygon, labels)
+        while name is None:
+            number += 1
+            name = f"Room {number}" if f"Room {number}" not in names else None
+        names.add(name)
+        rooms.append(Space(name=name, storey_id=storey_id,
+                           boundary=[(round(x, 6) + 0.0, round(y, 6) + 0.0) for x, y in ring(polygon)], height=height))
+    return rooms

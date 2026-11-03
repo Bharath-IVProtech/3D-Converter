@@ -43,15 +43,52 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1    # build 
 5. **Export** writes IFC.
 6. **Conversion settings** changes the defaults (wall height, sill height and so on) and re-runs detection.
 
-**Editing.** Click an element in the 3D view or the **Project browser**. Ctrl+click or Ctrl+A selects several.
+**Screen layout.** Commands are on the ribbon (**Home, Model, Edit, View, MEP, Coordinate, Documents**) and in the menus.
+- The bar under the ribbon shows the active level and the settings of the running tool.
+- The status bar shows the cursor's coordinates, what it has snapped to, and how much is selected.
+- Theme (**View > Dark theme**), window layout, display style and recent files are remembered. **View > Reset window layout** restores the docks.
+- Files can be dragged onto the window. **F1** lists every shortcut. Right-click in the view for common commands.
+
+**Drawing a model (Model tab).** These tools work on the active level. Set their sizes in the bar under the ribbon.
+
+| Tool | Key | How |
+|---|---|---|
+| Wall | W | Click each corner. Shift keeps it straight. Clicking the starting point closes the loop. |
+| Door / Window | D / N | Hover over a wall and click. It lands on the wall's middle when close, and stays inside the wall. |
+| Column | C | Click. It snaps to wall ends. |
+| Slab | S | Click the corners, then click the first corner again or press Enter. |
+| Stair | T | Click the foot, then the top of a single straight flight. The status bar shows the going and riser. |
+| Detect rooms | | Makes a room for each closed loop of walls that has none yet. |
+
+Enter or right-click ends a tool's current chain, and Esc stops the tool. Clicks snap to wall ends, wall middles, along walls, then a 50 mm grid.
+
+**Moving around.**
+
+| To | Do this |
+|---|---|
+| Turn the view | Drag with the left button |
+| Move the drawing | Drag with the middle button, Shift + left drag, or the arrow keys. On a touchpad, press **P** (Pan), then drag |
+| Zoom | Scroll to zoom towards the cursor, or use **=** and **-** |
+| See everything | **F** fits the model to the window |
+| Give the drawing the whole window | **F11** hides the panels |
+
+The model fills the window when imported and refits if the window is resized, until you move the view yourself. Panning and zooming stop before the drawing can be lost.
+
+**Large drawings.** A very large DWG takes a minute or two on first import. Importing the same unchanged file again is much faster, because BIMForge keeps its three most recent large drawings (100,000 objects or more) in `%LOCALAPPDATA%\BIMForge\drawing-cache`. These files can be 100 MB each and are safe to delete.
+
+**Viewing (View tab).** Seven view directions (Ctrl+1 to Ctrl+7), orthographic (O), fit (F), zoom to selection (Z), and five display styles: shaded, shaded with edges, hidden line, wireframe, X-ray. Also a ground grid (G), hide (H), isolate (I), show all (Shift+H) and section boxes.
+
+**Editing.** Click an element in the 3D view or the **Project browser**. Ctrl+click or Ctrl+A selects several; **Box select** (B) takes what is fully inside when you go left to right, and whatever it touches when you go right to left.
+- **Move** (V) and **Copy** (Ctrl+D): click a point, then where it should go. Copy keeps going until you press Esc, and a copied wall brings its doors and windows.
+- **Rotate** (R), **Mirror X / Y** and **Array** (Ctrl+Shift+A) work about the middle of the selection, as one undo step.
 - **Change a property:** double-click a value in **Properties**. Lengths are in metres, and points are typed as `x, y`.
-- **Move:** Ctrl+M opens the Move dialog. Doors and windows slide along their wall and stay inside it.
+- **Move by distance:** Ctrl+M opens the Move dialog. Doors and windows slide along their wall and stay inside it.
 - **Delete:** the Del key. Deleting a wall also deletes its openings.
 - **Validation:** an edit is rejected with an explanation if it would break the model (e.g. a window taller than its wall, or overlapping openings).
 - **Undo/redo** covers every edit.
 
 **Levels.** Use the **Levels** panel to add, duplicate (copies a typical floor) or delete levels, and to edit names and elevations.
-- The **Level** box in the toolbar sets the active level. Imports and drawing go there.
+- The **Level** box under the ribbon sets the active level. Imports and drawing go there.
 - Ctrl+L shows only the active level.
 
 **MEP** (MEP panel, right):
@@ -66,8 +103,13 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1    # build 
 **Coordination** (Coordination panel):
 - **Run clash detection** and **Run model checks**. Double-click an issue to zoom to it, and set its status (new, active, resolved, approved).
 - Statuses and comments are kept when tests are re-run.
-- **File > Export quantities (BOQ)** writes Excel or CSV.
+- **Documents > Export quantities (BOQ)** writes Excel or CSV.
 - **View > Section box** (Ctrl+B) clips the view. **Tools > Measure** (M) measures distances.
+
+**Documents** (Documents tab):
+- **Schedules** (Ctrl+Shift+T) lists doors, windows, rooms, walls, stairs, columns and ducts. Click a row to select that element, or export the table as CSV.
+- **PDF sheets** writes an A3 set: one floor plan per level, then the schedules. Plans have a title block, north arrow, scale bar, room names and areas, door and window tags, and the overall dimensions. The scale is the largest standard one that fits.
+- **Save image** saves the current 3D view as a PNG.
 
 **Projects.** Projects save as single-file `.bimx` (SQLite) with Ctrl+S, Ctrl+Shift+S and Ctrl+O.
 - **Autosave** runs every 2 minutes, to `<project>.bimx.autosave`, or to the app data folder for untitled projects.
@@ -75,6 +117,21 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1    # build 
 - An asterisk in the window title means there are unsaved changes.
 
 ### 2D drawing input (DXF / DWG / PDF)
+
+**Names come from the drawing.** Anything the drawing doesn't name keeps a plain number, such as "Room 7".
+
+| Element | Name taken from | Example |
+|---|---|---|
+| Room | The label inside it | SLUDGE HOLDING TANK 10KL |
+| Door, window, column | A tag next to it | D1, W2, C3 |
+| Stair | A stair label within 3 m | STAIRCASE-2 |
+| Duct | Its size label | 425x300 EA |
+| Louvre | Its note | FA LOUVER W/O VCD 1X2200X500H |
+| Project | The title block, under PROJECT TITLE, if the project is still Untitled | |
+| Level | "... PLAN AT ... LEVEL" in the plan's title, if the level still has a default name | INTERMEDIATE LEVEL |
+
+Sizes, dimensions, levels and equipment notes are never used as room names. Check the names in **Detection review**, and change any in **Properties**.
+
 
 - **DXF:** opened directly.
   - Plans drawn inside blocks are exploded automatically.
